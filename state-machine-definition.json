@@ -1,0 +1,21 @@
+{
+  "Comment": "3-step Lambda workflow",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:000000000000:function:lambda1",
+      "Next": "ProcessData"
+    },
+    "ProcessData": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:000000000000:function:lambda2",
+      "Next": "SaveToDB"
+    },
+    "SaveToDB": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:000000000000:function:lambda3",
+      "End": true
+    }
+  }
+}
