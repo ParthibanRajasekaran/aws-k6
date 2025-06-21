@@ -2,12 +2,12 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import { 
-  config, 
+  config, // eslint-disable-line no-unused-vars
   getBaseUrl, 
   enhancedMetrics, 
   generateTestFile, 
-  checkResponse,
-  measureDuration, 
+  checkResponse, // eslint-disable-line no-unused-vars
+  measureDuration, // eslint-disable-line no-unused-vars
   defaultSleep, 
   retryableRequest,
   warmup 

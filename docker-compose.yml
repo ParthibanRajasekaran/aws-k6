@@ -7,11 +7,9 @@ services:
       - SERVICES=lambda,s3,stepfunctions,dynamodb
       - DEFAULT_REGION=us-east-1
       - DEBUG=1
-      - LS_LOG=debug
-      - LAMBDA_EXECUTOR=docker
-      - LAMBDA_REMOTE_DOCKER=false
-      - LAMBDA_DOCKER_FLAGS=-m 256m
-      - PERSISTENCE=true
+      - LS_LOG=warn
+      - LAMBDA_EXECUTOR=local
+      - PERSISTENCE=false
       - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
@@ -22,13 +20,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
+      retries: 5
+      start_period: 15s
 
   k6:
     image: grafana/k6:latest
