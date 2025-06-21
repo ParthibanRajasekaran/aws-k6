@@ -1,5 +1,4 @@
 const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { Readable } = require('stream');
 const LRU = require('lru-cache');
 
 const REGION = process.env.AWS_REGION || 'us-east-1';

@@ -12,7 +12,7 @@ const app = express();
   app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
   // Error handling middleware
-  const errorHandler = (err, req, res, next) => {
+  const errorHandler = (err, req, res, _next) => {
     console.error('API Error:', err);
     res.status(500).json({ 
       error: err.message || 'Internal server error',
