@@ -1,0 +1,35 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack_step_fns
+    ports:
+      - "4570:4566"       # map host 4570 → container 4566
+    environment:
+      - SERVICES=lambda,stepfunctions,dynamodb
+      - DEFAULT_REGION=eu-west-1
+      - DEBUG=1
+      - LS_LOG=debug
+      - LAMBDA_EXECUTOR=docker
+      - LAMBDA_REMOTE_DOCKER=false
+      - LAMBDA_DOCKER_FLAGS=-m 256m
+      - STEPFUNCTIONS_LAMBDA_ENDPOINT=http://localhost:4566
+    networks:
+      - step_fns_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./localstack-sfn:/tmp/localstack
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+networks:
+  step_fns_net:
+    name: step_fns_net

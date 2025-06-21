@@ -1,0 +1,14 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=lambda,s3,dynamodb,stepfunctions  # ✅ Make sure 'dynamodb' is here
+      - DEBUG=1
+      - PERSISTENCE=true
+      - LAMBDA_EXECUTOR=docker-reuse
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack:/var/localstack"
