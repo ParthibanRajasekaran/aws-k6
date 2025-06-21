@@ -50,6 +50,9 @@
   },
   "devDependencies": {
     "aws-sdk-mock": "^6.2.1",
+    "eslint": "^9.29.0",
+    "eslint-plugin-jest": "^28.14.0",
+    "eslint-plugin-node": "^11.1.0",
     "jest": "^30.0.2",
     "k6-html-reporter": "^1.0.5"
   }
