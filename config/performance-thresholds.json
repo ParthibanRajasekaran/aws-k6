@@ -1,0 +1,29 @@
+{
+  "comment": "Performance grading thresholds for k6 load tests",
+  "thresholds": {
+    "A": {
+      "p95ResponseTime": 200,
+      "errorRate": 0.1,
+      "minThroughput": 100,
+      "description": "Excellent performance"
+    },
+    "B": {
+      "p95ResponseTime": 500,
+      "errorRate": 0.5,
+      "minThroughput": 50,
+      "description": "Good performance"
+    },
+    "C": {
+      "p95ResponseTime": 1000,
+      "errorRate": 1.0,
+      "minThroughput": 20,
+      "description": "Fair performance"
+    },
+    "D": {
+      "p95ResponseTime": 2000,
+      "errorRate": 2.0,
+      "minThroughput": 10,
+      "description": "Poor performance"
+    }
+  }
+}
