@@ -33,13 +33,12 @@ jobs:
     - name: Setup LocalStack
       run: |
         pip install awscli-local
-        docker-compose -f docker-compose.lambda-s3.yml up -d
+        docker-compose up -d
         sh ./scripts/wait-for-services.sh
         node scripts/deploy-localstack.js
 
     - name: Run k6 Performance Tests
-      run: |
-        docker-compose -f docker-compose.lambda-s3.yml exec -T k6 sh -c "sh /app/run-k6-tests.sh"
+      run: ./run-complete-tests.sh
 
     - name: Generate Consolidated Report
       run: |

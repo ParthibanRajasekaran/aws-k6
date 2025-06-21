@@ -74,7 +74,6 @@ validate_environment() {
     # Check if required tools are installed
     command -v docker >/dev/null 2>&1 || { error "Docker is required but not installed."; exit 1; }
     command -v docker-compose >/dev/null 2>&1 || { error "Docker Compose is required but not installed."; exit 1; }
-    command -v k6 >/dev/null 2>&1 || { error "k6 is required but not installed."; exit 1; }
     command -v node >/dev/null 2>&1 || { error "Node.js is required but not installed."; exit 1; }
     command -v jq >/dev/null 2>&1 || { warning "jq is not installed. JSON processing may be limited."; }
     
@@ -381,3 +380,26 @@ case "${1:-}" in
         exit 1
         ;;
 esac
+
+run_k6_test() {
+    local test_file=$1
+    log "Running k6 test: $test_file..."
+    
+    # Build k6 command
+    local k6_command="run /scripts/${test_file##*/}"
+    if [ -n "$VUS" ]; then
+        k6_command+=" --vus $VUS"
+    fi
+    if [ -n "$DURATION" ]; then
+        k6_command+=" --duration $DURATION"
+    fi
+
+    docker-compose run --rm k6 $k6_command
+
+    if [ $? -eq 0 ]; then
+        success "k6 test completed: $test_file"
+    else
+        error "k6 test failed: $test_file"
+        return 1
+    fi
+}

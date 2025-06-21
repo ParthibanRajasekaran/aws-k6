@@ -4,11 +4,46 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=lambda,s3,dynamodb,stepfunctions  # ✅ Make sure 'dynamodb' is here
+      - SERVICES=lambda,s3,stepfunctions,dynamodb
+      - DEFAULT_REGION=us-east-1
       - DEBUG=1
+      - LS_LOG=debug
+      - LAMBDA_EXECUTOR=docker
+      - LAMBDA_REMOTE_DOCKER=false
+      - LAMBDA_DOCKER_FLAGS=-m 256m
       - PERSISTENCE=true
-      - LAMBDA_EXECUTOR=docker-reuse
       - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
-      - "./localstack:/var/localstack"
+      - "./localstack-s3-data:/var/lib/localstack"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  k6:
+    image: grafana/k6:latest
+    container_name: k6_runner
+    ports:
+      - "6565:6565"
+    environment:
+      - K6_OUT=influxdb=http://influxdb:8086/k6
+    networks:
+      - app_net
+    volumes:
+      - ./k6:/scripts
+    depends_on:
+      - localstack
+
+networks:
+  app_net:
+    name: app_net
