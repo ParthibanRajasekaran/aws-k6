@@ -1,0 +1,278 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install ESLint
+        run: npm install eslint@8.x eslint-plugin-jest@27.x eslint-plugin-node@11.x --save-dev
+
+      - name: Create ESLint config if not exists
+        run: |
+          if [ ! -f .eslintrc.js ]; then
+            cat > .eslintrc.js << 'EOL'
+            module.exports = {
+              env: {
+                node: true,
+                jest: true,
+                es2020: true
+              },
+              extends: ['eslint:recommended', 'plugin:jest/recommended', 'plugin:node/recommended'],
+              parserOptions: {
+                ecmaVersion: 2020
+              },
+              rules: {
+                'no-console': 'off',
+                'node/no-unpublished-require': 'off'
+              }
+            };
+            EOL
+          fi
+
+      - name: Run ESLint
+        run: npx eslint --max-warnings=0 .
+
+      - name: Run Security audit
+        run: npm audit --audit-level=high
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Jest tests
+        run: npm run test:unit:coverage
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: reports/coverage
+
+  lambda-s3-integration:
+    name: Lambda & S3 Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: lambda,s3,dynamodb,stepfunctions
+          DEBUG: 1
+          LAMBDA_EXECUTOR: local
+          DOCKER_HOST: unix:///var/run/docker.sock
+        ports:
+          - 4566:4566
+        options: >-
+          --name=localstack
+          --health-cmd="curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval=30s
+          --health-timeout=10s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/v0.44.1/k6-v0.44.1-linux-amd64.tar.gz -o k6.tar.gz
+          tar -xzf k6.tar.gz
+          sudo cp k6-v0.44.1-linux-amd64/k6 /usr/local/bin/
+
+      - name: Verify LocalStack is ready
+        run: |
+          ./scripts/wait-for-services.sh --host=localhost --port=4566 --service=LocalStack --timeout=60
+          node scripts/verify-localstack.js
+
+      - name: Deploy Lambda and S3 to LocalStack
+        run: npm run deploy:localstack
+        env:
+          LOCALSTACK_HOST: localhost
+
+      - name: Start API Gateway Simulation
+        run: |
+          npm start &
+          ./scripts/wait-for-services.sh --host=localhost --port=3000 --service=APIGateway --timeout=30
+
+      - name: Run POST upload tests
+        run: npm run test:post
+        env:
+          API_URL: http://localhost:3000
+
+      - name: Run GET download tests
+        run: npm run test:get
+        env:
+          API_URL: http://localhost:3000
+
+      - name: Generate performance report
+        run: npm run report
+        
+      - name: Upload performance test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-s3-performance-report
+          path: reports/lambda-s3
+
+  step-functions-integration:
+    name: Step Functions Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: lambda,s3,dynamodb,stepfunctions
+          DEBUG: 1
+          LAMBDA_EXECUTOR: local
+          DOCKER_HOST: unix:///var/run/docker.sock
+        ports:
+          - 4566:4566
+        options: >-
+          --name=localstack
+          --health-cmd="curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval=30s
+          --health-timeout=10s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/v0.44.1/k6-v0.44.1-linux-amd64.tar.gz -o k6.tar.gz
+          tar -xzf k6.tar.gz
+          sudo cp k6-v0.44.1-linux-amd64/k6 /usr/local/bin/
+
+      - name: Verify LocalStack is ready
+        run: |
+          ./scripts/wait-for-services.sh --host=localhost --port=4566 --service=LocalStack --timeout=60
+          node scripts/verify-localstack.js
+
+      - name: Deploy Workflow to LocalStack
+        run: npm run deploy:workflow
+        env:
+          LOCALSTACK_HOST: localhost
+
+      - name: Run Step Functions workflow tests
+        run: npm run test:stepfn
+        env:
+          LOCALSTACK_HOST: localhost
+
+      - name: Generate performance report
+        run: npm run report:consolidated
+        
+      - name: Upload performance test reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: step-functions-performance-report
+          path: reports/step-functions
+
+  build-artifacts:
+    name: Build Deployment Artifacts
+    runs-on: ubuntu-latest
+    needs: [lambda-s3-integration, step-functions-integration]
+    if: success() && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci --production
+
+      - name: Package Lambda function
+        run: |
+          mkdir -p dist
+          zip -r dist/lambda-function.zip lambda/ node_modules/ -x "**/*.test.js" "**/*.spec.js"
+          zip -r dist/lambda1-function.zip lambda1/ node_modules/ -x "**/*.test.js" "**/*.spec.js"
+          zip -r dist/lambda2-function.zip lambda2/ node_modules/ -x "**/*.test.js" "**/*.spec.js"
+          zip -r dist/lambda3-function.zip lambda3/ node_modules/ -x "**/*.test.js" "**/*.spec.js"
+
+      - name: Upload Lambda artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-packages
+          path: dist/
+
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [static-analysis, unit-tests, lambda-s3-integration, step-functions-integration, build-artifacts]
+    if: always()
+    steps:
+      - name: Check build status
+        id: build-status
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          elif [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "status=cancelled" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: rtCamp/action-slack-notify@v2
+        if: false  # Disabled by default, enable if you have Slack configured
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ steps.build-status.outputs.status == 'success' && 'good' || steps.build-status.outputs.status == 'cancelled' && 'warning' || 'danger' }}
+          SLACK_TITLE: Build ${{ steps.build-status.outputs.status == 'success' && 'succeeded' || steps.build-status.outputs.status == 'cancelled' && 'cancelled' || 'failed' }}
+          SLACK_MESSAGE: "AWS K6 Performance Test Pipeline ${{ github.ref }} ${{ steps.build-status.outputs.status == 'success' && 'completed successfully' || steps.build-status.outputs.status == 'cancelled' && 'was cancelled' || 'failed' }}"
