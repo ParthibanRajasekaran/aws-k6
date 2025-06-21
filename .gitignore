@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+# We want to keep package-lock.json for reproducible builds
+# package-lock.json
+
+# Environment variables
+.env
+.env.*
+
+# LocalStack
+localstack*/
+!localstack/.gitkeep
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test reports
+reports/
+/test.txt
+*.log
+*.json
+!config/*.json
+!package.json
+!package-lock.json
+!state-machine-definition.json
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# K6 results
+get-results.json
+post-results.json
+
+# AI tooling
+.github/copilot*
+.copilot*
+.github/ISSUE_TEMPLATE/ai-suggestion.md
+.github/copilot-tracing.json
+.copilot-cli*
+.github/.copilot-test-history
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+function.zip
