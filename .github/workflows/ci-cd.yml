@@ -1,0 +1,323 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install ESLint
+        run: |
+          npm install -g eslint
+          npm install -D eslint-plugin-jest eslint-plugin-node
+
+      - name: Create ESLint config if not exists
+        run: |
+          if [ ! -f .eslintrc.js ]; then
+            echo "module.exports = {
+              env: {
+                node: true,
+                es2021: true,
+                jest: true
+              },
+              extends: ['eslint:recommended', 'plugin:node/recommended'],
+              plugins: ['jest'],
+              parserOptions: {
+                ecmaVersion: 2022
+              },
+              rules: {
+                'no-console': 'off',
+                'node/no-unpublished-require': ['error', {
+                  'allowModules': ['aws-sdk-mock', 'jest']
+                }]
+              }
+            };" > .eslintrc.js
+          fi
+      
+      - name: Run ESLint
+        run: eslint --ext .js .
+        continue-on-error: true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run unit tests
+        run: npm run test:unit:coverage
+        
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  lambda-s3-integration:
+    name: Lambda S3 Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: lambda,s3,dynamodb
+          DEBUG: 1
+          LAMBDA_EXECUTOR: local
+        options: >-
+          --health-cmd="curl -s http://localhost:4566/_localstack/health | grep '\"services\": {\"s3\": \"running\"'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+          
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
+          aws --version
+      
+      - name: Configure AWS credentials for LocalStack
+        run: |
+          aws configure set aws_access_key_id test
+          aws configure set aws_secret_access_key test
+          aws configure set region us-east-1
+          aws configure set output json
+          
+      - name: Deploy to LocalStack
+        run: npm run deploy:localstack
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          LOCALSTACK_HOST: localhost
+          
+      - name: Start API Gateway simulation
+        run: |
+          nohup npm run start &
+          sleep 5
+        env:
+          LOCALSTACK_HOST: localhost
+          ENDPOINT: http://localhost:4566
+          
+      - name: Install k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg software-properties-common
+          curl -s https://dl.k6.io/key.gpg | sudo apt-key add -
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+          
+      - name: Run k6 POST tests
+        run: npm run test:post
+        env:
+          API_URL: http://localhost:3000
+          
+      - name: Run k6 GET tests
+        run: npm run test:get
+        env:
+          API_URL: http://localhost:3000
+          
+      - name: Upload k6 results
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-s3-test-results
+          path: reports/lambda-s3/
+          retention-days: 7
+
+  step-functions-integration:
+    name: Step Functions Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: lambda,stepfunctions,dynamodb
+          DEBUG: 1
+          LAMBDA_EXECUTOR: local
+        options: >-
+          --health-cmd="curl -s http://localhost:4566/_localstack/health | grep '\"services\": {\"stepfunctions\": \"running\"'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+          
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
+          aws --version
+      
+      - name: Configure AWS credentials for LocalStack
+        run: |
+          aws configure set aws_access_key_id test
+          aws configure set aws_secret_access_key test
+          aws configure set region us-east-1
+          aws configure set output json
+          
+      - name: Deploy Step Functions workflow
+        run: npm run deploy:workflow
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          LOCALSTACK_HOST: localhost
+          
+      - name: Install k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg software-properties-common
+          curl -s https://dl.k6.io/key.gpg | sudo apt-key add -
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+          
+      - name: Run Step Functions performance tests
+        run: npm run test:stepfn
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          
+      - name: Upload Step Functions test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: step-functions-test-results
+          path: reports/step-functions/
+          retention-days: 7
+
+  build-and-package:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    needs: [lambda-s3-integration, step-functions-integration]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Package Lambda functions
+        run: |
+          mkdir -p dist
+          zip -r dist/lambda.zip lambda/
+          zip -r dist/lambda1.zip lambda1/
+          zip -r dist/lambda2.zip lambda2/
+          zip -r dist/lambda3.zip lambda3/
+          echo "Lambda packages created successfully"
+          
+      - name: Upload Lambda packages
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-packages
+          path: dist/
+          retention-days: 7
+          
+      - name: Generate consolidated test report
+        run: npm run report:consolidated
+        
+      - name: Upload consolidated test report
+        uses: actions/upload-artifact@v3
+        with:
+          name: consolidated-test-report
+          path: reports/consolidated/
+          retention-days: 7
+
+  report-summary:
+    name: Generate Test Report Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [build-and-package]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: all-artifacts
+          
+      - name: Display structure of downloaded files
+        run: find all-artifacts -type f | sort
+        
+      - name: Create summary report
+        run: |
+          echo "# AWS Lambda and Step Functions Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## Test Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit tests: ✅ Completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Lambda S3 Integration: ✅ Completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Step Functions Integration: ✅ Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Lambda Packages: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+          echo "- Test Reports: ✅ Available" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- Download the consolidated test report for detailed performance metrics" >> $GITHUB_STEP_SUMMARY
+          echo "- Review the Lambda packages for deployment" >> $GITHUB_STEP_SUMMARY

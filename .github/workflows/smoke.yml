@@ -1,0 +1,81 @@
+name: Smoke Tests
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: lambda,s3,dynamodb
+          DEBUG: 1
+          LAMBDA_EXECUTOR: local
+        options: >-
+          --health-cmd="curl -s http://localhost:4566/_localstack/health | grep '\"services\": {\"s3\": \"running\"'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies  
+        run: npm ci
+
+      - name: Install AWS CLI & k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
+          sudo apt-get install -y gnupg software-properties-common
+          curl -s https://dl.k6.io/key.gpg | sudo apt-key add -
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install k6
+
+      - name: Configure AWS credentials for LocalStack
+        run: |
+          aws configure set aws_access_key_id test
+          aws configure set aws_secret_access_key test
+          aws configure set region us-east-1
+          aws configure set output json
+
+      - name: Deploy to LocalStack
+        run: npm run deploy:localstack
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          LOCALSTACK_HOST: localhost
+
+      - name: Start API Gateway simulation
+        run: |
+          nohup npm run start &
+          sleep 5
+        env:
+          LOCALSTACK_HOST: localhost
+          ENDPOINT: http://localhost:4566
+
+      - name: Run k6 POST test
+        run: npm run test:post
+        env:
+          API_URL: http://localhost:3000
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: smoke-test-results
+          path: reports/post-test/
+          retention-days: 1
