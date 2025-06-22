@@ -131,14 +131,18 @@ jobs:
           --handler index.handler \
           --zip-file fileb://lambda.zip
         
-        # Test Lambda invocation
-        echo '{"httpMethod": "GET", "queryStringParameters": {"test": "integration"}}' > payload.json
+        # Test Lambda invocation with base64 encoding
         echo "Waiting for Lambda function to be ready..."
-        sleep 3
-
+        sleep 5
+        
+        # Use base64 encoded payload as AWS CLI expects
+        PAYLOAD='{"httpMethod": "GET", "queryStringParameters": {"test": "integration"}}'
+        PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64)
+        echo "Using base64 encoded payload for Lambda invocation"
+        
         aws --endpoint-url=http://localhost:4566 lambda invoke \
           --function-name test-lambda \
-          --payload file://payload.json \
+          --payload "$PAYLOAD_B64" \
           response.json
         
         echo "Lambda response:"
