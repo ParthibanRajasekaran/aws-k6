@@ -1,10 +1,7 @@
 name: Lambda S3 Testing (Simple)
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  # Temporarily disabled
   workflow_dispatch:
 
 env:

@@ -1,20 +1,7 @@
 name: Lambda S3 Testing Pipeline
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths:
-      - 'lambda/**'
-      - 'k6/**'
-      - 'scripts/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/lambda-s3.yml'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'lambda/**'
-      - 'k6/**'
-      - 'scripts/**'
+  # Temporarily disabled
   workflow_dispatch:
     inputs:
       test_duration:
