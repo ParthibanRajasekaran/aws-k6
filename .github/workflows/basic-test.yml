@@ -132,6 +132,7 @@ jobs:
           --zip-file fileb://lambda.zip
         
         # Test Lambda invocation
+        echo '{"httpMethod": "GET", "queryStringParameters": {"test": "integration"}}' > payload.json
         echo "Waiting for Lambda function to be ready..."
         sleep 3
 
