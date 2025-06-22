@@ -132,13 +132,19 @@ jobs:
           --zip-file fileb://lambda.zip
         
         # Test Lambda invocation
+        echo '{"httpMethod": "GET", "queryStringParameters": {"test": "integration"}}' > payload.json
+        echo "Waiting for Lambda function to be ready..."
+        sleep 3
+
         aws --endpoint-url=http://localhost:4566 lambda invoke \
           --function-name test-lambda \
-          --payload '{"httpMethod": "GET", "queryStringParameters": {"test": "integration"}}' \
+          --payload file://payload.json \
           response.json
+          payload.json
         
         echo "Lambda response:"
         cat response.json
+          payload.json
         
         echo "Lambda integration test passed!"
 
@@ -149,6 +155,7 @@ jobs:
         name: integration-test-results
         path: |
           response.json
+          payload.json
           lambda.zip
 
     - name: Cleanup LocalStack
