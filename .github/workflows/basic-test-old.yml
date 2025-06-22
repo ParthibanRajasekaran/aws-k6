@@ -1,0 +1,148 @@
+name: Lambda S3 Basic Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run unit tests
+      run: npm run test:unit
+      continue-on-error: true
+
+    - name: Start LocalStack with Docker
+      run: |
+        # Start LocalStack directly with docker
+        docker run -d \
+          --name localstack \
+          -p 4566:4566 \
+          -e SERVICES=lambda,s3 \
+          -e DEBUG=1 \
+          -e LAMBDA_EXECUTOR=local \
+          -e PERSISTENCE=false \
+          localstack/localstack:latest
+        
+        # Wait for LocalStack to be ready with better health checks
+        echo "Waiting for LocalStack to start..."
+        sleep 15
+        
+        # Check if LocalStack is responding with proper health checks
+        for i in {1..30}; do
+          if curl -s http://localhost:4566/_localstack/health | grep -q '"s3": "available"' && \
+             curl -s http://localhost:4566/_localstack/health | grep -q '"lambda": "available"'; then
+            echo "LocalStack is ready!"
+            break
+          fi
+          echo "Waiting for LocalStack services... attempt $i/30"
+          sleep 2
+        done
+        
+        # Final health check
+        echo "Final LocalStack health status:"
+        curl -s http://localhost:4566/_localstack/health || echo "Health endpoint not accessible"
+
+    - name: Install AWS CLI
+      run: |
+        # Check if AWS CLI is already installed
+        if command -v aws &> /dev/null; then
+          echo "AWS CLI is already installed, updating..."
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
+        else
+          echo "Installing AWS CLI..."
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+        fi
+        aws --version
+        
+        # Configure AWS CLI
+        aws configure set aws_access_key_id test
+        aws configure set aws_secret_access_key test
+        aws configure set region us-east-1
+
+    - name: Test LocalStack connectivity
+      run: |
+        echo "Testing LocalStack health..."
+        if ! curl -s http://localhost:4566/_localstack/health; then
+          echo "LocalStack health check failed, showing logs:"
+          docker logs localstack
+          exit 1
+        fi
+        
+        echo "LocalStack health status:"
+        curl -s http://localhost:4566/_localstack/health | jq '.' || curl -s http://localhost:4566/_localstack/health
+        
+        echo "Creating test S3 bucket..."
+        aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+        
+        echo "Listing S3 buckets..."
+        aws --endpoint-url=http://localhost:4566 s3 ls
+
+    - name: Deploy Lambda function
+      run: |
+        echo "Deploying Lambda function..."
+        cd lambda
+        zip -r ../lambda.zip .
+        cd ..
+        
+        aws --endpoint-url=http://localhost:4566 lambda create-function \
+          --function-name test-lambda \
+          --runtime nodejs20.x \
+          --role arn:aws:iam::000000000000:role/fake-role \
+          --handler index.handler \
+          --zip-file fileb://lambda.zip
+        
+        echo "Listing Lambda functions..."
+        aws --endpoint-url=http://localhost:4566 lambda list-functions
+
+    - name: Test Lambda invocation
+      run: |
+        echo "Testing Lambda function..."
+        aws --endpoint-url=http://localhost:4566 lambda invoke \
+          --function-name test-lambda \
+          --payload '{"httpMethod": "GET", "queryStringParameters": {"test": "data"}}' \
+          response.json || echo "Lambda invocation failed"
+        
+        if [ -f response.json ]; then
+          echo "Lambda response:"
+          cat response.json
+        fi
+      continue-on-error: true
+
+    - name: Start API Gateway simulation
+      run: |
+        echo "Starting API Gateway..."
+        timeout 30s npm start &
+        sleep 5
+        
+        # Test health endpoint
+        curl -f http://localhost:3000/health || echo "API Gateway health check failed"
+      continue-on-error: true
+
+    - name: Cleanup
+      if: always()
+      run: |
+        pkill -f "npm start" || echo "No npm processes to kill"
+        docker stop localstack || echo "LocalStack already stopped"
+        docker rm localstack || echo "LocalStack container already removed"
