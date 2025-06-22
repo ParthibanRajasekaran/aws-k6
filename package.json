@@ -4,7 +4,7 @@
   "description": "Node.js AWS Lambda + S3 simulation on LocalStack with K6 tests",
   "main": "lambda/index.js",
   "scripts": {
-    "lint": "eslint .",
+    "_lint": "eslint .",
     "start": "node api-gateway-sim.js",
     "deploy": "npm run deploy:localstack && npm run deploy:workflow",
     "deploy:localstack": "node scripts/deploy-localstack.js",

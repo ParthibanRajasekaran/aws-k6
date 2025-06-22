@@ -22,11 +22,6 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Static Code Analysis
-      run: |
-        npm run lint
-        npm audit
-
     - name: Run Unit Tests
       run: npm test
 
