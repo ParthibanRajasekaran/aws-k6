@@ -192,7 +192,8 @@ jobs:
         
       - name: Run Unit Tests with Coverage
         run: |
-          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit --testPathIgnorePatterns="/integration/" --no-eslint
+          # Using --testMatch instead of deprecated --testPathPattern
+          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit --testMatch="**/tests/unit/**/*.test.js" --no-eslint
         env:
           JEST_JUNIT_OUTPUT_DIR: ./reports/junit
           JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
@@ -203,7 +204,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          test-script: npm run test:unit:coverage -- --no-eslint
+          test-script: npm run test:unit:coverage -- --testMatch="**/tests/unit/**/*.test.js" --no-eslint
           package-manager: npm
           annotations: coverage
           skip-step: install
@@ -305,7 +306,7 @@ jobs:
           export BUCKET=${{ env.BUCKET_NAME }}
           export API_URL=http://localhost:3000
           # Run tests with --no-eslint to avoid linting errors
-          npm run test:unit -- --testPathPattern="integration" --testTimeout=60000 --verbose --no-eslint
+          npm run test:unit -- --testPathPatterns="integration" --testTimeout=60000 --verbose --no-eslint
           
       - name: Dump LocalStack Logs
         if: always()
