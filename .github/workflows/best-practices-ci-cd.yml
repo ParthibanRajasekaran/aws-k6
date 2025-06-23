@@ -192,7 +192,7 @@ jobs:
         
       - name: Run Unit Tests with Coverage
         run: |
-          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit
+          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit --testPathIgnorePatterns="/integration/"
         env:
           JEST_JUNIT_OUTPUT_DIR: ./reports/junit
           JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
@@ -293,7 +293,7 @@ jobs:
           export ENDPOINT=http://localhost:4566
           export AWS_REGION=us-east-1
           export BUCKET=${{ env.BUCKET_NAME }}
-          npm run test:unit -- --testNamePattern="integration" --testTimeout=60000 --verbose
+          npm run test:unit -- --testPathPattern="integration" --testTimeout=60000 --verbose
           
       - name: Dump LocalStack Logs
         if: always()
