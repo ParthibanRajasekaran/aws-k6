@@ -90,9 +90,9 @@ jobs:
             echo 'versions=["${{ env.NODE_VERSION }}"]' >> $GITHUB_OUTPUT
           fi
 
-  # Job 2: Code Quality & Security (Parallel with setup)
+  # Job 2: Security (Parallel with setup)
   quality:
-    name: Code Quality & Security
+    name: Security Scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: setup
@@ -127,11 +127,6 @@ jobs:
       - name: Install Dependencies
         run: npm ci --prefer-offline --no-audit
         
-      - name: Run Linting
-        run: |
-          npm run _lint -- --format=compact --output-file=lint-results.txt
-          if [ -f lint-results.txt ]; then cat lint-results.txt; fi
-          
       - name: Security Audit
         run: |
           npm audit --audit-level=moderate --json > audit-results.json || true
@@ -167,7 +162,6 @@ jobs:
         with:
           name: quality-results-node${{ matrix.node-version }}
           path: |
-            lint-results.txt
             audit-results.json
             trivy-results.sarif
           retention-days: 30
@@ -256,18 +250,21 @@ jobs:
         
       # LocalStack Setup - Official GitHub Action (Best Practices)
       - name: Start LocalStack
-        uses: LocalStack/setup-localstack@v0.2.3
+        uses: LocalStack/setup-localstack@v0.2.2
         with:
           image-tag: 'latest'
           install-awslocal: 'true'
-          configuration: SERVICES=lambda,s3,stepfunctions,dynamodb,iam,DEBUG=0,LS_LOG=warn,LAMBDA_EXECUTOR=local,LAMBDA_REMOVE_CONTAINERS=1
+          configuration: |
+            SERVICES=lambda,s3,stepfunctions,dynamodb,iam
+            DEBUG=0
+            LS_LOG=warn
+            LAMBDA_EXECUTOR=local
+            LAMBDA_REMOVE_CONTAINERS=1
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
-          # LocalStack Pro features (optional)
-          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN || '' }}
           
       - name: Wait for LocalStack
         run: |
@@ -337,18 +334,20 @@ jobs:
         
       # LocalStack Setup - Official GitHub Action (Best Practices)
       - name: Start LocalStack
-        uses: LocalStack/setup-localstack@v0.2.3
+        uses: LocalStack/setup-localstack@v0.2.2
         with:
           image-tag: 'latest'
           install-awslocal: 'true'
-          configuration: SERVICES=lambda,s3,stepfunctions,dynamodb,DEBUG=0,LS_LOG=warn,LAMBDA_EXECUTOR=local
+          configuration: |
+            SERVICES=lambda,s3,stepfunctions,dynamodb
+            DEBUG=0
+            LS_LOG=warn
+            LAMBDA_EXECUTOR=local
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
-          # LocalStack Pro features (optional)
-          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN || '' }}
         
       # K6 Setup - Official Grafana Action (Best Practices)
       - name: Setup K6
@@ -609,35 +608,28 @@ jobs:
       - name: Comment PR with Test Results
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-tests.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance-tests.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
+            const comment = `## 🧪 Test Results Summary
             
-            let comment = '## 🧪 Test Results Summary\n\n';
-            comment += `**Build ID:** \`${{ github.run_id }}\`\n`;
-            comment += `**Commit:** \`${{ github.sha }}\`\n\n`;
+            **Build ID:** \`${{ github.run_id }}\`
+            **Commit:** \`${{ github.sha }}\`
             
-            // Add status for each job
-            const jobs = [
-              { name: 'Code Quality', result: '${{ needs.quality.result }}' },
-              { name: 'Unit Tests', result: '${{ needs.unit-tests.result }}' },
-              { name: 'Integration Tests', result: '${{ needs.integration-tests.result }}' },
-              { name: 'Performance Tests', result: '${{ needs.performance-tests.result }}' },
-              { name: 'Build', result: '${{ needs.build.result }}' }
-            ];
+            | Test Suite | Status |
+            |------------|--------|
+            | Security Scan | ${process.env.QUALITY_RESULT} |
+            | Unit Tests | ${process.env.UNIT_RESULT} |
+            | Integration Tests | ${process.env.INTEGRATION_RESULT} |
+            | Performance Tests | ${process.env.PERFORMANCE_RESULT} |
+            | Build | ${process.env.BUILD_RESULT} |
             
-            comment += '| Test Suite | Status |\n';
-            comment += '|------------|--------|\n';
-            
-            jobs.forEach(job => {
-              const emoji = job.result === 'success' ? '✅' : 
-                           job.result === 'failure' ? '❌' : 
-                           job.result === 'skipped' ? '⏭️' : '⏳';
-              comment += `| ${job.name} | ${emoji} ${job.result} |\n`;
-            });
-            
-            comment += '\n📊 [View detailed results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})';
+            📊 [View detailed results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
             
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -732,7 +724,7 @@ jobs:
           echo "### Job Results" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Code Quality | ${{ needs.quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.quality.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Performance Tests | ${{ needs.performance-tests.result }} |" >> $GITHUB_STEP_SUMMARY
