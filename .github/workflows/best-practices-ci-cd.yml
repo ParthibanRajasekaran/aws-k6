@@ -26,13 +26,13 @@ on:
       node_version:
         description: 'Node.js version override'
         required: false
-        default: '18'
+        default: '20'
         type: choice
-        options: ['16', '18', '20']
+        options: ['18', '20', '22']
 
 # Global environment variables
 env:
-  NODE_VERSION: ${{ github.event.inputs.node_version || '18' }}
+  NODE_VERSION: ${{ github.event.inputs.node_version || '20' }}
   AWS_DEFAULT_REGION: us-east-1
   BUCKET_NAME: test-bucket-${{ github.run_id }}
   LOCALSTACK_HOST: localhost
@@ -85,7 +85,7 @@ jobs:
         id: matrix
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo 'versions=["16", "18", "20"]' >> $GITHUB_OUTPUT
+            echo 'versions=["18", "20", "22"]' >> $GITHUB_OUTPUT
           else
             echo 'versions=["${{ env.NODE_VERSION }}"]' >> $GITHUB_OUTPUT
           fi
