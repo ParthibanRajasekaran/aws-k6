@@ -17,7 +17,12 @@ describe('Lambda S3 Integration Tests', () => {
   let lambdaClient;
   
   beforeAll(async () => {
-    // Configure AWS clients for LocalStack
+    console.log('🚀 Setting up integration tests with LocalStack');
+    console.log(`LocalStack endpoint: ${LOCALSTACK_ENDPOINT}`);
+    console.log(`Region: ${REGION}`);
+    console.log(`Bucket: ${BUCKET_NAME}`);
+    
+    // Configure AWS clients for LocalStack with extended timeout
     const config = {
       region: REGION,
       endpoint: LOCALSTACK_ENDPOINT,
@@ -25,61 +30,101 @@ describe('Lambda S3 Integration Tests', () => {
       credentials: {
         accessKeyId: 'test',
         secretAccessKey: 'test'
+      },
+      maxAttempts: 5,
+      retryMode: 'standard',
+      requestHandler: {
+        timeoutInMs: 15000
       }
     };
     
+    console.log('Creating S3 and Lambda clients...');
     s3Client = new S3Client(config);
     lambdaClient = new LambdaClient(config);
     
-    // Wait for LocalStack to be ready
+    // Wait for LocalStack to be ready with extended timeout
+    console.log('Waiting for LocalStack to be ready...');
     await waitForLocalStack();
     
     // Ensure S3 bucket exists
+    console.log(`Ensuring S3 bucket '${BUCKET_NAME}' exists...`);
     try {
-      await s3Client.send(new CreateBucketCommand({ Bucket: BUCKET_NAME }));
+      const createBucketResponse = await s3Client.send(new CreateBucketCommand({ Bucket: BUCKET_NAME }));
+      console.log('✅ S3 bucket created successfully:', createBucketResponse);
     } catch (error) {
       // Bucket might already exist, which is fine
-      if (!error.message.includes('BucketAlreadyExists')) {
-        console.warn('S3 bucket creation warning:', error.message);
+      if (!error.message.includes('BucketAlreadyExists') && !error.message.includes('BucketAlreadyOwnedByYou')) {
+        console.warn('⚠️ S3 bucket creation warning:', error.message);
+        console.log('Attempting to list buckets to verify connectivity...');
+        try {
+          const listBucketsResponse = await s3Client.send(new ListBucketsCommand({}));
+          console.log('Current buckets:', listBucketsResponse.Buckets.map(b => b.Name));
+        } catch (listError) {
+          console.error('❌ Failed to list buckets:', listError.message);
+        }
+      } else {
+        console.log('ℹ️ Bucket already exists, continuing...');
       }
     }
-  });
+    
+    console.log('✅ Integration test setup completed');
+  }, 90000); // Extend beforeAll timeout to 90 seconds
 
   // Helper function to wait for LocalStack to be ready
-  async function waitForLocalStack(maxRetries = 30, delay = 1000) {
+  async function waitForLocalStack(maxRetries = 60, delay = 2000) {
     for (let i = 0; i < maxRetries; i++) {
       try {
+        console.log(`Connecting to LocalStack at: ${LOCALSTACK_ENDPOINT}`);
         const response = await makeHttpRequest(`${LOCALSTACK_ENDPOINT}/_localstack/health`);
         const health = JSON.parse(response);
+        console.log(`LocalStack health status: ${JSON.stringify(health)}`);
         
         if (health.services && health.services.s3 === 'available' && health.services.lambda === 'available') {
-          console.log('LocalStack is ready');
+          console.log('✅ LocalStack is ready');
           return;
+        } else {
+          const s3Status = health.services?.s3 || 'unknown';
+          const lambdaStatus = health.services?.lambda || 'unknown';
+          console.log(`⚠️ LocalStack services not fully ready: S3=${s3Status}, Lambda=${lambdaStatus}`);
         }
       } catch (error) {
-        // LocalStack not ready yet
+        console.log(`⚠️ LocalStack not ready yet: ${error.message}`);
       }
       
       console.log(`Waiting for LocalStack... (${i + 1}/${maxRetries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
     
+    console.log('❌ LocalStack did not become available in time');
     throw new Error('LocalStack did not become available in time');
   }
 
-  // Helper function to make HTTP requests
+  // Helper function to make HTTP requests with improved error handling
   function makeHttpRequest(url) {
     return new Promise((resolve, reject) => {
+      console.log(`Making HTTP request to ${url}`);
       const request = http.get(url, (response) => {
         let data = '';
         response.on('data', (chunk) => { data += chunk; });
-        response.on('end', () => resolve(data));
+        response.on('end', () => {
+          console.log(`Received response from ${url}: status=${response.statusCode}`);
+          if (response.statusCode >= 400) {
+            reject(new Error(`HTTP error ${response.statusCode}: ${data}`));
+          } else {
+            resolve(data);
+          }
+        });
       });
       
-      request.on('error', reject);
-      request.setTimeout(5000, () => {
+      request.on('error', (error) => {
+        console.log(`HTTP request error for ${url}: ${error.message}`);
+        reject(error);
+      });
+      
+      request.setTimeout(10000, () => {
+        console.log(`HTTP request timeout for ${url}`);
         request.destroy();
-        reject(new Error('Request timeout'));
+        reject(new Error(`Request timeout for ${url}`));
       });
     });
   }
