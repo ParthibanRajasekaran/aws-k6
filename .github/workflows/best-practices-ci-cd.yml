@@ -1,0 +1,763 @@
+name: Production-Ready CI/CD Pipeline
+
+# Trigger Configuration - Following best practices for event handling
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'hotfix/**' ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip performance tests (for faster feedback)'
+        required: false
+        default: false
+        type: boolean
+      node_version:
+        description: 'Node.js version override'
+        required: false
+        default: '18'
+        type: choice
+        options: ['16', '18', '20']
+
+# Global environment variables
+env:
+  NODE_VERSION: ${{ github.event.inputs.node_version || '18' }}
+  AWS_DEFAULT_REGION: us-east-1
+  BUCKET_NAME: test-bucket-${{ github.run_id }}
+  LOCALSTACK_HOST: localhost
+  
+# Concurrency control - prevent duplicate runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Security - minimal permissions
+permissions:
+  contents: read
+  issues: read
+  checks: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  # Job 1: Setup and Validation (Fast feedback)
+  setup:
+    name: Setup & Pre-flight Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      skip-performance: ${{ steps.conditions.outputs.skip-performance }}
+      node-matrix: ${{ steps.matrix.outputs.versions }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for change detection
+          
+      - name: Generate Cache Key
+        id: cache-key
+        run: |
+          echo "key=npm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('**/package-lock.json') }}" >> $GITHUB_OUTPUT
+          
+      - name: Set Conditions
+        id: conditions
+        run: |
+          SKIP_PERF="false"
+          if [[ "${{ github.event.inputs.skip_tests }}" == "true" ]] || [[ "${{ github.event_name }}" == "pull_request" && "${{ github.base_ref }}" != "main" ]]; then
+            SKIP_PERF="true"
+          fi
+          echo "skip-performance=$SKIP_PERF" >> $GITHUB_OUTPUT
+          
+      - name: Set Matrix Versions
+        id: matrix
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo 'versions=["16", "18", "20"]' >> $GITHUB_OUTPUT
+          else
+            echo 'versions=["${{ env.NODE_VERSION }}"]' >> $GITHUB_OUTPUT
+          fi
+
+  # Job 2: Code Quality & Security (Parallel with setup)
+  quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: setup
+    
+    # Security: minimal permissions for this job
+    permissions:
+      contents: read
+      security-events: write
+      
+    strategy:
+      matrix:
+        node-version: ${{ fromJson(needs.setup.outputs.node-matrix) }}
+        
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          
+      - name: Restore Dependencies Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ needs.setup.outputs.cache-key }}
+          restore-keys: |
+            npm-${{ runner.os }}-${{ matrix.node-version }}-
+            
+      - name: Install Dependencies
+        run: npm ci --prefer-offline --no-audit
+        
+      - name: Run Linting
+        run: |
+          npm run _lint -- --format=compact --output-file=lint-results.txt
+          if [ -f lint-results.txt ]; then cat lint-results.txt; fi
+          
+      - name: Security Audit
+        run: |
+          npm audit --audit-level=moderate --json > audit-results.json || true
+          if [ -s audit-results.json ]; then
+            echo "Security audit results:"
+            cat audit-results.json | jq '.vulnerabilities'
+            # Fail on high/critical vulnerabilities
+            HIGH_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.high // 0')
+            CRITICAL_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.critical // 0')
+            if [ "$HIGH_VULNS" -gt 0 ] || [ "$CRITICAL_VULNS" -gt 0 ]; then
+              echo "High or critical vulnerabilities found!"
+              exit 1
+            fi
+          fi
+          
+      - name: Trivy Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          
+      - name: Upload Security Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          
+      - name: Upload Quality Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-results-node${{ matrix.node-version }}
+          path: |
+            lint-results.txt
+            audit-results.json
+            trivy-results.sarif
+          retention-days: 30
+
+  # Job 3: Unit Tests (Fast, comprehensive)
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [setup, quality]
+    
+    strategy:
+      matrix:
+        node-version: ${{ fromJson(needs.setup.outputs.node-matrix) }}
+        
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      - name: Run Unit Tests with Coverage
+        run: |
+          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ./reports/junit
+          JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
+          
+      # Jest Coverage Report - Official Action (Best Practices)
+      - name: Jest Coverage Report
+        uses: ArtiomTr/jest-coverage-report-action@v2
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          test-script: npm run test:unit:coverage
+          package-manager: npm
+          annotations: coverage
+          skip-step: install
+          threshold: 80
+          
+      - name: Upload Coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./reports/coverage/lcov.info
+          flags: unittests,node${{ matrix.node-version }}
+          name: unit-tests-node${{ matrix.node-version }}
+          fail_ci_if_error: false
+          
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results-node${{ matrix.node-version }}
+          path: |
+            reports/coverage/
+            reports/junit/
+          retention-days: 30
+
+  # Job 4: Integration Tests with LocalStack
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [setup, unit-tests]
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'integration-tests')
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      # LocalStack Setup - Official GitHub Action (Best Practices)
+      - name: Start LocalStack
+        uses: LocalStack/setup-localstack@v0.2.3
+        with:
+          image-tag: 'latest'
+          install-awslocal: 'true'
+          configuration: SERVICES=lambda,s3,stepfunctions,dynamodb,iam,DEBUG=0,LS_LOG=warn,LAMBDA_EXECUTOR=local,LAMBDA_REMOVE_CONTAINERS=1
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          # LocalStack Pro features (optional)
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN || '' }}
+          
+      - name: Wait for LocalStack
+        run: |
+          echo "Waiting for LocalStack health check..."
+          timeout 120 bash -c '
+            until curl -f http://localhost:4566/_localstack/health >/dev/null 2>&1; do
+              echo -n "."
+              sleep 2
+            done
+          '
+          echo "LocalStack is ready!"
+          
+      - name: Verify LocalStack Services
+        run: |
+          # Verify all required services are available
+          curl -s http://localhost:4566/_localstack/health | jq '.services'
+          
+      - name: Deploy Test Infrastructure
+        run: |
+          npm run deploy:localstack
+          sleep 10
+          npm run verify:localstack
+          
+      - name: Run Integration Tests
+        run: |
+          export ENDPOINT=http://localhost:4566
+          export AWS_REGION=us-east-1
+          export BUCKET=${{ env.BUCKET_NAME }}
+          npm run test:unit -- --testNamePattern="integration" --testTimeout=60000 --verbose
+          
+      - name: Dump LocalStack Logs
+        if: always()
+        run: |
+          echo "Collecting LocalStack logs for debugging..."
+          localstack logs | tee localstack-integration.log || true
+          
+      - name: Upload Integration Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: |
+            reports/
+            localstack-integration.log
+          retention-days: 30
+
+  # Job 5: Performance Tests with K6
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [setup, integration-tests]
+    if: needs.setup.outputs.skip-performance == 'false'
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      # LocalStack Setup - Official GitHub Action (Best Practices)
+      - name: Start LocalStack
+        uses: LocalStack/setup-localstack@v0.2.3
+        with:
+          image-tag: 'latest'
+          install-awslocal: 'true'
+          configuration: SERVICES=lambda,s3,stepfunctions,dynamodb,DEBUG=0,LS_LOG=warn,LAMBDA_EXECUTOR=local
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          # LocalStack Pro features (optional)
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN || '' }}
+        
+      # K6 Setup - Official Grafana Action (Best Practices)
+      - name: Setup K6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: latest
+          
+      - name: Setup Test Environment
+        run: |
+          # Wait for LocalStack
+          timeout 120 bash -c 'until curl -f http://localhost:4566/_localstack/health; do sleep 2; done'
+          
+          # Deploy infrastructure
+          npm run deploy:localstack
+          sleep 10
+          
+          # Start API Gateway simulation in background
+          npm start &
+          API_PID=$!
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          
+          # Wait for API to be ready
+          timeout 60 bash -c 'until curl -f http://localhost:3000/health; do sleep 2; done'
+          echo "Test environment ready!"
+          
+      # K6 Performance Tests - Official Grafana Action (Best Practices)
+      - name: Run POST Performance Tests
+        uses: grafana/run-k6-action@v1
+        with:
+          path: k6/post-test.js
+          flags: --out json=post-results.json --out web-dashboard=post-dashboard.html
+        env:
+          API_URL: http://localhost:3000
+          AWS_ENDPOINT: http://localhost:4566
+          AWS_REGION: us-east-1
+          
+      - name: Run GET Performance Tests
+        uses: grafana/run-k6-action@v1
+        with:
+          path: k6/get-test.js
+          flags: --out json=get-results.json --out web-dashboard=get-dashboard.html
+        env:
+          API_URL: http://localhost:3000
+          AWS_ENDPOINT: http://localhost:4566
+          AWS_REGION: us-east-1
+          
+      - name: Generate Performance Report
+        run: |
+          # Generate performance report
+          npm run analyze
+          
+      - name: Dump LocalStack Logs
+        if: always()
+        run: |
+          echo "Collecting LocalStack logs for debugging..."
+          localstack logs | tee localstack-performance.log || true
+          
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ ! -z "$API_PID" ]; then
+            kill $API_PID || true
+          fi
+          
+      - name: Upload Performance Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-test-results
+          path: |
+            reports/
+            *-results.json
+            k6-*.html
+            *-dashboard.html
+            localstack-performance.log
+          retention-days: 30
+
+  # Job 6: Build & Package
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality, unit-tests]
+    outputs:
+      build-version: ${{ steps.version.outputs.version }}
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Production Dependencies
+        run: npm ci --production --prefer-offline
+        
+      - name: Generate Build Version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            VERSION="1.0.${{ github.run_number }}"
+          else
+            VERSION="1.0.${{ github.run_number }}-${{ github.sha }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+          
+      - name: Create Deployment Packages
+        run: |
+          mkdir -p dist
+          
+          # Create deployment packages for each Lambda function
+          for lambda_dir in lambda lambda1 lambda2 lambda3; do
+            if [ -d "$lambda_dir" ]; then
+              echo "Packaging $lambda_dir..."
+              cd "$lambda_dir"
+              zip -r "../dist/${lambda_dir}.zip" . -x "*.test.js" "*.spec.js" "__tests__/*"
+              cd ..
+            fi
+          done
+          
+          # Create configuration package
+          zip -r dist/config.zip docker-compose*.yml state-machine-definition.json package.json package-lock.json
+          
+          # List created packages
+          ls -la dist/
+          
+      - name: Validate Packages
+        run: |
+          for package in dist/*.zip; do
+            echo "Validating $package..."
+            if ! unzip -t "$package"; then
+              echo "Invalid package: $package"
+              exit 1
+            fi
+          done
+          
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages-${{ steps.version.outputs.version }}
+          path: |
+            dist/
+            docker-compose*.yml
+            state-machine-definition.json
+          retention-days: 90
+
+  # Job 7: End-to-End Tests (Full system test)
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build, performance-tests]
+    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'e2e-tests')
+    
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: lambda,s3,stepfunctions,dynamodb
+          DEFAULT_REGION: us-east-1
+          DEBUG: 0
+          LS_LOG: warn
+          LAMBDA_EXECUTOR: local
+          PERSISTENCE: 0
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval=10s
+          --health-timeout=10s
+          --health-retries=6
+          --health-start-period=30s
+          
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-packages-${{ needs.build.outputs.build-version }}
+          path: dist/
+          
+      - name: Run Complete Test Suite
+        run: |
+          # Wait for LocalStack
+          timeout 120 bash -c 'until curl -f http://localhost:4566/_localstack/health; do sleep 2; done'
+          
+          # Setup complete environment
+          npm run setup
+          sleep 10
+          
+          # Run comprehensive tests
+          npm run test:robust
+          
+      - name: Upload E2E Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            reports/
+            *.log
+          retention-days: 30
+
+  # Job 8: Generate Reports
+  reports:
+    name: Generate Consolidated Reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [unit-tests, integration-tests, performance-tests, e2e-tests]
+    if: always() && (needs.unit-tests.result != 'cancelled')
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      - name: Download All Test Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          
+      - name: Generate Consolidated Report
+        run: |
+          npm run report:consolidated
+          
+      - name: Upload Consolidated Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-report-${{ github.run_id }}
+          path: |
+            reports/consolidated/
+            reports/
+          retention-days: 90
+          
+      - name: Comment PR with Test Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            let comment = '## 🧪 Test Results Summary\n\n';
+            comment += `**Build ID:** \`${{ github.run_id }}\`\n`;
+            comment += `**Commit:** \`${{ github.sha }}\`\n\n`;
+            
+            // Add status for each job
+            const jobs = [
+              { name: 'Code Quality', result: '${{ needs.quality.result }}' },
+              { name: 'Unit Tests', result: '${{ needs.unit-tests.result }}' },
+              { name: 'Integration Tests', result: '${{ needs.integration-tests.result }}' },
+              { name: 'Performance Tests', result: '${{ needs.performance-tests.result }}' },
+              { name: 'Build', result: '${{ needs.build.result }}' }
+            ];
+            
+            comment += '| Test Suite | Status |\n';
+            comment += '|------------|--------|\n';
+            
+            jobs.forEach(job => {
+              const emoji = job.result === 'success' ? '✅' : 
+                           job.result === 'failure' ? '❌' : 
+                           job.result === 'skipped' ? '⏭️' : '⏳';
+              comment += `| ${job.name} | ${emoji} ${job.result} |\n`;
+            });
+            
+            comment += '\n📊 [View detailed results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Job 9: Deployment (Production/Staging)
+  deploy:
+    name: Deploy to ${{ github.ref == 'refs/heads/main' && 'Production' || 'Staging' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build, e2e-tests]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    environment: 
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+      url: ${{ github.ref == 'refs/heads/main' && 'https://api.production.example.com' || 'https://api.staging.example.com' }}
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-packages-${{ needs.build.outputs.build-version }}
+          path: dist/
+          
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE }}
+          role-session-name: GitHubActions-${{ github.run_id }}
+          
+      - name: Deploy Lambda Functions
+        run: |
+          ENV_PREFIX=${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+          
+          # Deploy each Lambda function
+          for lambda in lambda lambda1 lambda2 lambda3; do
+            if [ -f "dist/${lambda}.zip" ]; then
+              echo "Deploying ${lambda} to ${ENV_PREFIX}..."
+              aws lambda update-function-code \
+                --function-name "${ENV_PREFIX}-${lambda}" \
+                --zip-file "fileb://dist/${lambda}.zip" \
+                --publish
+              
+              # Wait for deployment to complete
+              aws lambda wait function-updated \
+                --function-name "${ENV_PREFIX}-${lambda}"
+            fi
+          done
+          
+      - name: Post-deployment Verification
+        run: |
+          ENV_PREFIX=${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+          echo "Verifying deployment for ${ENV_PREFIX}..."
+          
+          # Add health checks or smoke tests here
+          # Example: curl health endpoints, run minimal test suite
+          
+      - name: Notify Deployment Success
+        run: |
+          echo "✅ Deployment to ${{ github.ref == 'refs/heads/main' && 'Production' || 'Staging' }} completed successfully!"
+          echo "Version: ${{ needs.build.outputs.build-version }}"
+          echo "Commit: ${{ github.sha }}"
+
+  # Job 10: Cleanup & Notifications
+  cleanup:
+    name: Cleanup & Notifications
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [quality, unit-tests, integration-tests, performance-tests, build, e2e-tests, reports, deploy]
+    if: always()
+    
+    steps:
+      - name: Workflow Summary
+        run: |
+          echo "## 🚀 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Job results
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Tests | ${{ needs.performance-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Tests | ${{ needs.e2e-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Reports | ${{ needs.reports.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Determine Overall Status
+        id: status
+        run: |
+          # Determine if the pipeline succeeded
+          if [[ "${{ needs.quality.result }}" == "success" && 
+                "${{ needs.unit-tests.result }}" == "success" && 
+                "${{ needs.build.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=Pipeline completed successfully ✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=Pipeline failed ❌" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Final Status
+        run: |
+          echo "${{ steps.status.outputs.message }}"
+          if [[ "${{ steps.status.outputs.status }}" == "failure" ]]; then
+            exit 1
+          fi
