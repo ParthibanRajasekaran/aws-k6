@@ -1,0 +1,56 @@
+name: Smoke Tests
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  deployment_status:
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - run: npm ci --production
+      
+      - name: Quick Lint Check
+        run: npm run _lint
+        
+      - name: Fast Unit Tests
+        run: |
+          # Run only fast unit tests
+          npm run test:unit -- --testNamePattern="should.*successfully" --maxWorkers=2
+          
+      - name: Basic Integration Check
+        run: |
+          docker compose up -d localstack
+          timeout 30 bash -c 'until curl -f http://localhost:4566/_localstack/health; do sleep 1; done'
+          npm run verify:localstack
+          
+      - name: Health Check
+        run: |
+          npm start &
+          sleep 5
+          curl -f http://localhost:3000/health || exit 1
+          
+      - name: Notify on Success
+        if: success()
+        run: echo "✅ Smoke tests passed!"
+        
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "🔴 Smoke tests failed!"
+          exit 1

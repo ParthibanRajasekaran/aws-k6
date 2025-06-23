@@ -1,0 +1,140 @@
+name: Production Deployment
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: 'Version to deploy'
+        required: true
+        type: string
+
+env:
+  NODE_VERSION: '18'
+  AWS_DEFAULT_REGION: us-east-1
+
+jobs:
+  validate:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      version: ${{ steps.set-version.outputs.version }}
+    steps:
+      - name: Set Environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Set Version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    name: Deploy to ${{ needs.validate.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: 
+      name: ${{ needs.validate.outputs.environment }}
+      url: https://${{ needs.validate.outputs.environment }}.example.com
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --production
+
+      - name: Run Pre-deployment Tests
+        run: |
+          npm run validate
+          npm run test:unit
+
+      - name: Build Deployment Packages
+        run: |
+          mkdir -p dist
+          zip -r dist/lambda.zip lambda/ node_modules/ package.json
+          zip -r dist/lambda1.zip lambda1/ node_modules/ package.json
+          zip -r dist/lambda2.zip lambda2/ node_modules/ package.json
+          zip -r dist/lambda3.zip lambda3/ node_modules/ package.json
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Deploy Lambda Functions
+        run: |
+          # Deploy main Lambda
+          aws lambda update-function-code \
+            --function-name ${{ needs.validate.outputs.environment }}-lambda-s3 \
+            --zip-file fileb://dist/lambda.zip
+            
+          # Deploy Lambda1
+          aws lambda update-function-code \
+            --function-name ${{ needs.validate.outputs.environment }}-lambda1 \
+            --zip-file fileb://dist/lambda1.zip
+            
+          # Deploy Lambda2
+          aws lambda update-function-code \
+            --function-name ${{ needs.validate.outputs.environment }}-lambda2 \
+            --zip-file fileb://dist/lambda2.zip
+            
+          # Deploy Lambda3
+          aws lambda update-function-code \
+            --function-name ${{ needs.validate.outputs.environment }}-lambda3 \
+            --zip-file fileb://dist/lambda3.zip
+
+      - name: Update Step Functions
+        run: |
+          aws stepfunctions update-state-machine \
+            --state-machine-arn "arn:aws:states:${{ env.AWS_DEFAULT_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:stateMachine:${{ needs.validate.outputs.environment }}-workflow" \
+            --definition file://state-machine-definition.json
+
+      - name: Run Smoke Tests
+        run: |
+          echo "Running smoke tests for ${{ needs.validate.outputs.environment }}"
+          # Add smoke test commands here
+          
+      - name: Notify Deployment Success
+        run: |
+          echo "✅ Successfully deployed version ${{ needs.validate.outputs.version }} to ${{ needs.validate.outputs.environment }}"
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [validate, deploy]
+    if: failure()
+    steps:
+      - name: Rollback Deployment
+        run: |
+          echo "🔴 Deployment failed, initiating rollback for ${{ needs.validate.outputs.environment }}"
+          # Add rollback logic here
