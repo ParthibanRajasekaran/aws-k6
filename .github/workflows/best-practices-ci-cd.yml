@@ -328,6 +328,37 @@ jobs:
           echo "🔌 Testing LocalStack connectivity..."
           curl -v http://localhost:4566/ || true
           
+      - name: Print LocalStack Version and Plugins
+        run: |
+          echo "LocalStack version and plugins:"
+          localstack --version || true
+          localstack status services || true
+
+      - name: Ensure Docker Socket Permissions
+        run: |
+          echo "Checking Docker socket permissions..."
+          ls -l /var/run/docker.sock || true
+          id || true
+
+      - name: Create Dummy IAM Role for Lambda
+        run: |
+          echo "Creating dummy IAM role for Lambda..."
+          aws --endpoint-url=$ENDPOINT iam create-role \
+            --role-name lambda-role \
+            --assume-role-policy-document '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}' \
+            || echo "Role may already exist"
+          aws --endpoint-url=$ENDPOINT iam attach-role-policy \
+            --role-name lambda-role \
+            --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole \
+            || echo "Policy may already be attached"
+
+      - name: Check Lambda Runtime Availability
+        run: |
+          echo "Checking available Lambda runtimes in LocalStack..."
+          aws --endpoint-url=$ENDPOINT lambda list-functions || true
+          echo "If nodejs20.x is not supported, update LocalStack image."
+
+      # Deploy Test Infrastructure
       - name: Deploy Test Infrastructure
         run: |
           # Verify AWS CLI is working correctly with LocalStack
@@ -342,14 +373,19 @@ jobs:
           cd lambda && zip -r ../function.zip . && cd ..
           ls -la function.zip
           # Deploy Lambda function manually first to ensure it works
-          echo "� Manually deploying Lambda function..."
-          aws --endpoint-url=$ENDPOINT lambda create-function \
-            --function-name test-lambda \
-            --runtime nodejs20.x \
-            --role arn:aws:iam::000000000000:role/lambda-role \
-            --handler index.handler \
-            --zip-file fileb://function.zip \
-            || echo "Lambda may already exist"
+          echo "🛠️ Manually deploying Lambda function..."
+          for i in {1..3}; do
+            aws --endpoint-url=$ENDPOINT lambda create-function \
+              --function-name test-lambda \
+              --runtime nodejs20.x \
+              --role arn:aws:iam::000000000000:role/lambda-role \
+              --handler index.handler \
+              --zip-file fileb://function.zip \
+              && break || echo "Lambda may already exist or failed (attempt $i)";
+            echo "LocalStack logs for debugging Lambda creation:";
+            localstack logs | tail -n 100;
+            sleep 10;
+          done
           # Now run the regular deployment script
           echo "📦 Running deployment script..."
           for i in {1..3}; do
