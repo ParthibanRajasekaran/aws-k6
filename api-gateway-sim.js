@@ -20,6 +20,15 @@ const app = express();
     });
   };
 
+  // Health check endpoint
+  app.get('/health', (req, res) => {
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      service: 'api-gateway-simulation'
+    });
+  });
+
   // Add performance monitoring middleware
   app.use((req, res, next) => {
     const start = process.hrtime();

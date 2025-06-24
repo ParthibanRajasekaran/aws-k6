@@ -1,5 +1,6 @@
 require("dotenv").config();
 const minimist = require("minimist");
+const { execSync } = require("child_process");
 
 const {
   LambdaClient,
@@ -77,6 +78,27 @@ async function deleteStateMachine() {
   }
 }
 
+const cleanup = () => {
+  console.log("Cleaning up Step Functions workflow...");
+  try {
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 stepfunctions delete-state-machine --state-machine-arn arn:aws:states:us-east-1:000000000000:stateMachine:MyStateMachine", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda1", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda2", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda3", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 dynamodb delete-table --table-name workflow-results", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name lambda-ex --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name lambda-ex", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name StepFunctionsRole --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy", { stdio: "inherit" });
+    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name StepFunctionsRole", { stdio: "inherit" });
+    console.log("Cleanup successful.");
+  } catch (error) {
+    console.error("Cleanup failed:", error);
+    // Do not exit with error code, as some resources might have been already deleted
+  }
+};
+
 (async () => {
   try {
     if (!args["skip-lambdas"]) await deleteLambdas();
@@ -92,4 +114,5 @@ async function deleteStateMachine() {
   } catch (err) {
     console.error("❌ Cleanup failed:", err.message);
   }
+  cleanup();
 })();

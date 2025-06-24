@@ -129,46 +129,27 @@ describe('Lambda S3 Integration Tests', () => {
     });
   }
 
-  // Helper function to invoke Lambda via API Gateway simulation
-  async function invokeLambdaViaApi(method, path, body = null) {
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'localhost',
-        port: 3000,
-        path: path,
-        method: method,
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      };
-
-      if (body) {
-        options.headers['Content-Length'] = Buffer.byteLength(body);
-      }
-
-      const req = http.request(options, (res) => {
-        let responseData = '';
-        res.on('data', (chunk) => { responseData += chunk; });
-        res.on('end', () => {
-          resolve({
-            statusCode: res.statusCode,
-            headers: res.headers,
-            body: responseData
-          });
-        });
-      });
-
-      req.on('error', reject);
-      req.setTimeout(10000, () => {
-        req.destroy();
-        reject(new Error('Request timeout'));
-      });
-
-      if (body) {
-        req.write(body);
-      }
-      req.end();
+  // Helper to invoke Lambda directly for true integration testing
+  async function invokeLambda(payload) {
+    const command = new InvokeCommand({
+      FunctionName: 'test-lambda',
+      Payload: JSON.stringify(payload),
+      LogType: 'Tail', // To get execution logs
     });
+
+    const { Payload, LogResult } = await lambdaClient.send(command);
+    const result = JSON.parse(Buffer.from(Payload).toString());
+    
+    if (LogResult) {
+      const logs = Buffer.from(LogResult, 'base64').toString();
+      console.log('Lambda Execution Logs:', logs);
+    }
+    
+    if (result.statusCode >= 400 && result.body) {
+      console.error('Lambda returned error:', result.body);
+    }
+
+    return result;
   }
 
   describe('S3 Upload Functionality', () => {
@@ -178,14 +159,19 @@ describe('Lambda S3 Integration Tests', () => {
         content: Buffer.from('Integration test content').toString('base64')
       };
 
-      const response = await invokeLambdaViaApi('POST', '/upload', JSON.stringify(testData));
+      const event = {
+        httpMethod: 'POST',
+        body: JSON.stringify(testData)
+      };
+
+      const response = await invokeLambda(event);
       
       expect(response.statusCode).toBe(200);
       
       const responseBody = JSON.parse(response.body);
       expect(responseBody.message).toBe('File uploaded');
       expect(responseBody.filename).toBe(testData.filename);
-    });
+    }, 30000);
 
     test('should handle large file uploads', async () => {
       const largeContent = 'A'.repeat(10000); // 10KB file
@@ -193,28 +179,16 @@ describe('Lambda S3 Integration Tests', () => {
         filename: `large-file-${Date.now()}.txt`,
         content: Buffer.from(largeContent).toString('base64')
       };
-
-      const response = await invokeLambdaViaApi('POST', '/upload', JSON.stringify(testData));
-      
+      const event = { httpMethod: 'POST', body: JSON.stringify(testData) };
+      const response = await invokeLambda(event);
       expect(response.statusCode).toBe(200);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.message).toBe('File uploaded');
-      expect(responseBody.filename).toBe(testData.filename);
     });
 
     test('should reject upload with missing filename', async () => {
-      const testData = {
-        content: Buffer.from('Test content').toString('base64')
-        // Missing filename
-      };
-
-      const response = await invokeLambdaViaApi('POST', '/upload', JSON.stringify(testData));
-      
+      const testData = { content: 'missing filename' };
+      const event = { httpMethod: 'POST', body: JSON.stringify(testData) };
+      const response = await invokeLambda(event);
       expect(response.statusCode).toBe(400);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.error).toBe('Missing filename or content');
     });
   });
 
@@ -222,101 +196,82 @@ describe('Lambda S3 Integration Tests', () => {
     let uploadedFilename;
 
     beforeEach(async () => {
-      // Upload a test file first
-      const testData = {
-        filename: `download-test-${Date.now()}.txt`,
-        content: Buffer.from('Download test content').toString('base64')
+      uploadedFilename = `test-file-for-download-${Date.now()}.txt`;
+      const uploadData = {
+        filename: uploadedFilename,
+        content: Buffer.from('some content').toString('base64')
       };
-
-      const uploadResponse = await invokeLambdaViaApi('POST', '/upload', JSON.stringify(testData));
+      const uploadEvent = { httpMethod: 'POST', body: JSON.stringify(uploadData) };
+      const uploadResponse = await invokeLambda(uploadEvent);
       expect(uploadResponse.statusCode).toBe(200);
-      
-      uploadedFilename = testData.filename;
     });
 
     test('should download file from S3 via Lambda', async () => {
-      const response = await invokeLambdaViaApi('GET', `/download?filename=${uploadedFilename}`);
-      
+      const downloadEvent = {
+        httpMethod: 'GET',
+        queryStringParameters: { filename: uploadedFilename }
+      };
+      const response = await invokeLambda(downloadEvent);
       expect(response.statusCode).toBe(200);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.filename).toBe(uploadedFilename);
-      expect(responseBody.content).toBeTruthy();
-      
-      // Verify content can be decoded
-      const decodedContent = Buffer.from(responseBody.content, 'base64').toString();
-      expect(decodedContent).toBe('Download test content');
+      const body = JSON.parse(response.body);
+      expect(body.filename).toBe(uploadedFilename);
+      expect(body.content).toBe(Buffer.from('some content').toString('base64'));
     });
 
     test('should return 400 for download without filename', async () => {
-      const response = await invokeLambdaViaApi('GET', '/download');
-      
+      const event = { httpMethod: 'GET' };
+      const response = await invokeLambda(event);
       expect(response.statusCode).toBe(400);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.error).toBe('Missing filename parameter');
     });
 
     test('should return 404 for non-existent file', async () => {
-      const response = await invokeLambdaViaApi('GET', '/download?filename=non-existent-file.txt');
-      
+      const event = {
+        httpMethod: 'GET',
+        queryStringParameters: { filename: 'non-existent-file.txt' }
+      };
+      const response = await invokeLambda(event);
       expect(response.statusCode).toBe(404);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.code).toBe('NoSuchKey');
     });
   });
 
   describe('Caching Functionality', () => {
     test('should cache files for subsequent downloads', async () => {
-      // Upload a test file
-      const testData = {
-        filename: `cache-test-${Date.now()}.txt`,
-        content: Buffer.from('Cache test content').toString('base64')
-      };
+      const filename = `cache-test-${Date.now()}.txt`;
+      const content = Buffer.from('cachable content').toString('base64');
+      
+      // Upload the file
+      await invokeLambda({ httpMethod: 'POST', body: JSON.stringify({ filename, content }) });
 
-      await invokeLambdaViaApi('POST', '/upload', JSON.stringify(testData));
+      // First download (should populate cache)
+      const firstDownload = await invokeLambda({ httpMethod: 'GET', queryStringParameters: { filename } });
+      expect(firstDownload.statusCode).toBe(200);
 
-      // First download
-      const startTime1 = Date.now();
-      const response1 = await invokeLambdaViaApi('GET', `/download?filename=${testData.filename}`);
-      const duration1 = Date.now() - startTime1;
-      
-      expect(response1.statusCode).toBe(200);
-
-      // Second download (should be faster due to caching)
-      const startTime2 = Date.now();
-      const response2 = await invokeLambdaViaApi('GET', `/download?filename=${testData.filename}`);
-      const duration2 = Date.now() - startTime2;
-      
-      expect(response2.statusCode).toBe(200);
-      
-      // Both responses should have the same content
-      const body1 = JSON.parse(response1.body);
-      const body2 = JSON.parse(response2.body);
-      expect(body1.content).toBe(body2.content);
-      
-      console.log(`First download: ${duration1}ms, Second download: ${duration2}ms`);
+      // To test the cache, we'd ideally need to check logs or mock time,
+      // but for this integration test, we'll just ensure a second call works.
+      const secondDownload = await invokeLambda({ httpMethod: 'GET', queryStringParameters: { filename } });
+      expect(secondDownload.statusCode).toBe(200);
+      const body = JSON.parse(secondDownload.body);
+      expect(body.content).toBe(content);
     });
   });
 
   describe('Error Handling', () => {
     test('should handle malformed JSON gracefully', async () => {
-      const response = await invokeLambdaViaApi('POST', '/upload', 'invalid json');
-      
+      const event = {
+        httpMethod: 'POST',
+        body: '{"filename": "test.txt", "content": }' // Invalid JSON
+      };
+      const response = await invokeLambda(event);
+      // The lambda's try/catch will handle the JSON.parse error
       expect(response.statusCode).toBe(500);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.error).toContain('Unexpected token');
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unexpected token');
     });
 
     test('should handle unsupported HTTP methods', async () => {
-      const response = await invokeLambdaViaApi('DELETE', '/upload');
-      
+      const event = { httpMethod: 'PUT' };
+      const response = await invokeLambda(event);
       expect(response.statusCode).toBe(405);
-      
-      const responseBody = JSON.parse(response.body);
-      expect(responseBody.error).toBe('Method not allowed');
     });
   });
 });

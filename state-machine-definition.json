@@ -1,5 +1,5 @@
 {
-  "Comment": "3-step Lambda workflow",
+  "Comment": "A simple state machine that validates, processes, and saves data.",
   "StartAt": "ValidateInput",
   "States": {
     "ValidateInput": {
