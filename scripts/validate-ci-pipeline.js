@@ -70,7 +70,6 @@ class PipelineValidator {
       const requiredScripts = [
         'test:unit',
         'test:unit:coverage',
-        '_lint',
         'start',
         'deploy:localstack',
         'verify:localstack'

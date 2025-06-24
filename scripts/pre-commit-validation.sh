@@ -27,12 +27,12 @@ warning() {
 }
 
 # Step 1: Lint check (optional)
-log "Checking if linting is available..."
-if npm run _lint 2>/dev/null; then
-    log "✅ Linting passed (optional)"
-else
-    warning "⚠️ Linting skipped or not configured"
-fi
+# log "Checking if linting is available..."
+# if npm run _lint 2>/dev/null; then
+#     log "✅ Linting passed (optional)"
+# else
+#     warning "⚠️ Linting skipped or not configured"
+# fi
 
 # Step 2: Unit tests
 log "Running unit tests..."

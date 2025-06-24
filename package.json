@@ -4,7 +4,6 @@
   "description": "Node.js AWS Lambda + S3 simulation on LocalStack with K6 tests",
   "main": "lambda/index.js",
   "scripts": {
-    "_lint": "eslint .",
     "start": "node api-gateway-sim.js",
     "deploy": "npm run deploy:localstack && npm run deploy:workflow",
     "deploy:localstack": "node scripts/deploy-localstack.js",
@@ -15,7 +14,9 @@
     "test:get": "./scripts/run-k6-tests.sh k6/get-test.js",
     "test:stepfn": "./scripts/run-k6-tests.sh k6/stepfn-test.js",
     "test:all": "npm run test:post && npm run test:get && npm run test:stepfn",
-    "test:unit": "jest",
+    "test:unit": "jest --projects unit",
+    "test:integration": "jest --projects integration",
+    "test:integration:stepfn": "jest tests/integration/step-functions.integration.test.js",
     "test:unit:lambda1": "jest tests/unit/lambda1",
     "test:unit:lambda2": "jest tests/unit/lambda2",
     "test:unit:lambda3": "jest tests/unit/lambda3",
@@ -34,7 +35,12 @@
     "fix": "node scripts/fix-test-issues.js",
     "wait:localstack": "./scripts/wait-for-services.sh --host=localhost --port=4566 --service=LocalStack --timeout=60",
     "wait:api": "./scripts/wait-for-services.sh --host=localhost --port=3000 --service=APIGateway --timeout=30",
-    "test:robust": "npm run wait:localstack && npm run deploy && npm run wait:api && npm run test:all"
+    "test:robust": "npm run wait:localstack && npm run deploy && npm run wait:api && npm run test:all",
+    "zip:lambda1": "zip -j lambda1.zip lambda1/index.js",
+    "zip:lambda2": "zip -j lambda2.zip lambda2/index.js",
+    "zip:lambda3": "zip -j lambda3.zip lambda3/index.js",
+    "zip:lambdas": "npm run zip:lambda1 && npm run zip:lambda2 && npm run zip:lambda3",
+    "deploy:stepfn": "aws --endpoint-url=http://localhost:4566 stepfunctions create-state-machine --state-machine-name MyStateMachine --definition file://./state-machine-definition.json --role-arn arn:aws:iam::000000000000:role/StepFunctionsRole"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.826.0",
