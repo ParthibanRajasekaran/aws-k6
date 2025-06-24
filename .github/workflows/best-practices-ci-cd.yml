@@ -193,7 +193,7 @@ jobs:
       - name: Run Unit Tests with Coverage
         run: |
           # Only run unit tests, not integration tests
-          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit --testMatch="**/tests/unit/**/*.test.js" --projects=unit --no-eslint
+          npm run test:unit:coverage -- --reporters=default --reporters=jest-junit --testMatch="**/tests/unit/**/*.test.js" --no-eslint
         env:
           JEST_JUNIT_OUTPUT_DIR: ./reports/junit
           JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
@@ -204,7 +204,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          test-script: npm run test:unit:coverage -- --testMatch="**/tests/unit/**/*.test.js" --projects=unit --no-eslint
+          test-script: npm run test:unit:coverage -- --testMatch="**/tests/unit/**/*.test.js" --no-eslint
           package-manager: npm
           annotations: coverage
           skip-step: install
