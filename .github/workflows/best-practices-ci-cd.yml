@@ -84,11 +84,8 @@ jobs:
       - name: Set Matrix Versions
         id: matrix
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo 'versions=["18", "20", "22"]' >> $GITHUB_OUTPUT
-          else
-            echo 'versions=["${{ env.NODE_VERSION }}"]' >> $GITHUB_OUTPUT
-          fi
+          # Only test on Node.js 18 and 20
+          echo 'versions=["18", "20"]' >> $GITHUB_OUTPUT
 
   # Job 2: Security (Parallel with setup)
   quality:
@@ -437,33 +434,22 @@ jobs:
           
       - name: Run Integration Tests
         run: |
-          # Environment variables already set at job level
+          set -e
           echo "Using BUCKET=$BUCKET and ENDPOINT=$ENDPOINT for integration tests"
-          
-          # Upload a test file to S3 to ensure Lambda can access it
           echo "🔍 Creating test file and uploading to S3..."
           echo "This is a test file for integration tests" > test.txt
-          aws --endpoint-url=$ENDPOINT s3 cp test.txt s3://$BUCKET/test.txt
-          aws --endpoint-url=$ENDPOINT s3 ls s3://$BUCKET/
-          
-          # Test Lambda direct invocation with S3 operation
+          aws --endpoint-url=$ENDPOINT s3 cp test.txt s3://$BUCKET/test.txt || { echo "S3 upload failed"; exit 1; }
+          aws --endpoint-url=$ENDPOINT s3 ls s3://$BUCKET/ || { echo "S3 ls failed"; exit 1; }
           echo "🧪 Testing Lambda with S3 access..."
           aws --endpoint-url=$ENDPOINT lambda invoke \
             --function-name test-lambda \
             --payload '{"httpMethod":"GET", "queryStringParameters":{"filename":"test.txt"}}' \
-            lambda-get-test.json || echo "Lambda GET test failed"
-          
+            lambda-get-test.json || { echo "Lambda GET test failed"; cat lambda-get-test.json || true; exit 1; }
           cat lambda-get-test.json || echo "No output file"
-          
-          # Check API Gateway
           echo "🔗 Testing API Gateway endpoints..."
-          curl -v http://localhost:3000/download?filename=test.txt || echo "API test failed"
-          
-          # Debug lambda configuration
+          curl -v http://localhost:3000/download?filename=test.txt || { echo "API test failed"; exit 1; }
           echo "🔍 Inspecting Lambda configuration..."
-          aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda || echo "Cannot get Lambda config"
-          
-          # Run integration tests with special handling for LocalStack
+          aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda || { echo "Cannot get Lambda config"; exit 1; }
           echo "🧪 Running integration tests with extended timeout and debug..."
           npx jest \
             --runInBand \
@@ -474,8 +460,8 @@ jobs:
             --forceExit \
             --detectOpenHandles \
             --reporters=default \
-            --reporters=jest-junit
-          
+            --reporters=jest-junit || { echo "Integration tests failed"; exit 1; }
+
       - name: Dump LocalStack Logs
         if: always()
         run: |
