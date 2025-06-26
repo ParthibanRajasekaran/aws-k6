@@ -284,7 +284,6 @@ jobs:
             HOSTNAME_EXTERNAL=localhost
             LOCALSTACK_HOST=localhost
             DOCKER_HOST=unix:///var/run/docker.sock
-            LAMBDA_DOCKER_FLAGS=-v /tmp:/tmp -v /var/run/docker.sock:/var/run/docker.sock
             LAMBDA_REMOTE_DOCKER=0
             LAMBDA_INIT_DELAYER=0
             LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
