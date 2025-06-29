@@ -24,6 +24,7 @@ reports/
 *.log
 *.json
 !config/*.json
+!iam/*.json
 !package.json
 !package-lock.json
 !state-machine-definition.json
