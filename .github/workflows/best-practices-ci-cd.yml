@@ -351,10 +351,39 @@ jobs:
             --role-name lambda-role \
             --assume-role-policy-document '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}' \
             || echo "Role may already exist"
+          
+          # Create S3 access policy for Lambda
+          echo "Creating S3 policy for Lambda..."
+          aws --endpoint-url=$ENDPOINT iam create-policy \
+            --policy-name s3-access-policy \
+            --policy-document '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::*",
+                    "arn:aws:s3:::*/*"
+                  ]
+                }
+              ]
+            }' || echo "Policy may already exist"
+            
+          # Attach policies to Lambda role
           aws --endpoint-url=$ENDPOINT iam attach-role-policy \
             --role-name lambda-role \
             --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole \
-            || echo "Policy may already be attached"
+            || echo "Basic policy may already be attached"
+            
+          aws --endpoint-url=$ENDPOINT iam attach-role-policy \
+            --role-name lambda-role \
+            --policy-arn arn:aws:iam::000000000000:policy/s3-access-policy \
+            || echo "S3 policy may already be attached"
 
       - name: Check Lambda Runtime Availability
         run: |

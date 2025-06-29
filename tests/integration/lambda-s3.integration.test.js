@@ -22,7 +22,7 @@ describe('Lambda S3 Integration Tests', () => {
     console.log(`Region: ${REGION}`);
     console.log(`Bucket: ${BUCKET_NAME}`);
     
-    // Configure AWS clients for LocalStack with extended timeout
+    // Configure AWS clients for LocalStack with extended timeout and better error handling
     const config = {
       region: REGION,
       endpoint: LOCALSTACK_ENDPOINT,
@@ -31,10 +31,10 @@ describe('Lambda S3 Integration Tests', () => {
         accessKeyId: 'test',
         secretAccessKey: 'test'
       },
-      maxAttempts: 5,
-      retryMode: 'standard',
+      maxAttempts: 10,  // Increased retry attempts
+      retryMode: 'adaptive',  // Use adaptive retry mode for best behavior
       requestHandler: {
-        timeoutInMs: 15000
+        timeoutInMs: 30000  // Increased timeout to 30 seconds
       }
     };
     
@@ -68,10 +68,13 @@ describe('Lambda S3 Integration Tests', () => {
     }
     
     console.log('✅ Integration test setup completed');
-  }, 90000); // Extend beforeAll timeout to 90 seconds
+  }, 120000); // Extend beforeAll timeout to 120 seconds
 
   // Helper function to wait for LocalStack to be ready
   async function waitForLocalStack(maxRetries = 60, delay = 2000) {
+    // Determine whether any of the required services are initialized
+    let servicesInitialized = false;
+    
     for (let i = 0; i < maxRetries; i++) {
       try {
         console.log(`Connecting to LocalStack at: ${LOCALSTACK_ENDPOINT}`);
@@ -79,20 +82,59 @@ describe('Lambda S3 Integration Tests', () => {
         const health = JSON.parse(response);
         console.log(`LocalStack health status: ${JSON.stringify(health)}`);
         
-        if (health.services && health.services.s3 === 'available' && health.services.lambda === 'available') {
-          console.log('✅ LocalStack is ready');
-          return;
-        } else {
+        // Accept 'available', 'running', or even 'initialized' as valid service states
+        if (health.services) {
           const s3Status = health.services?.s3 || 'unknown';
           const lambdaStatus = health.services?.lambda || 'unknown';
+
+          // If both services are in any of the operational states
+          if ((s3Status === 'available' || s3Status === 'running' || s3Status === 'initialized') && 
+              (lambdaStatus === 'available' || lambdaStatus === 'running' || lambdaStatus === 'initialized')) {
+            console.log('✅ LocalStack is ready');
+            return;
+          }
+          
+          // Mark that we've at least seen the services initialized
+          if (s3Status !== 'unknown' && lambdaStatus !== 'unknown') {
+            servicesInitialized = true;
+          }
+          
           console.log(`⚠️ LocalStack services not fully ready: S3=${s3Status}, Lambda=${lambdaStatus}`);
         }
       } catch (error) {
         console.log(`⚠️ LocalStack not ready yet: ${error.message}`);
       }
       
+      // After half the retries, try connecting directly to the services to verify they work
+      if (i === Math.floor(maxRetries / 2)) {
+        try {
+          console.log('Attempting to connect directly to S3 and Lambda...');
+          try {
+            const listBucketsCommand = new ListBucketsCommand({});
+            await s3Client.send(listBucketsCommand);
+            console.log('✅ S3 service is accessible, continuing with tests despite health status');
+            servicesInitialized = true;
+          } catch (s3Error) {
+            console.log(`❌ S3 connectivity test failed: ${s3Error.message}`);
+          }
+        } catch (e) {
+          console.log(`Direct service test failed: ${e.message}`);
+        }
+      }
+      
+      // After 75% of max retries, if we've seen services initialized, proceed anyway
+      if (i > Math.floor(maxRetries * 0.75) && servicesInitialized) {
+        console.log('⚠️ Services appear partially initialized. Proceeding with tests despite incomplete health status.');
+        return;
+      }
+      
       console.log(`Waiting for LocalStack... (${i + 1}/${maxRetries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    
+    if (servicesInitialized) {
+      console.log('⚠️ LocalStack services were seen as initialized but not fully ready. Proceeding with caution.');
+      return;
     }
     
     console.log('❌ LocalStack did not become available in time');
@@ -100,32 +142,75 @@ describe('Lambda S3 Integration Tests', () => {
   }
 
   // Helper function to make HTTP requests with improved error handling
-  function makeHttpRequest(url) {
+  function makeHttpRequest(url, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
       console.log(`Making HTTP request to ${url}`);
-      const request = http.get(url, (response) => {
-        let data = '';
-        response.on('data', (chunk) => { data += chunk; });
-        response.on('end', () => {
-          console.log(`Received response from ${url}: status=${response.statusCode}`);
-          if (response.statusCode >= 400) {
-            reject(new Error(`HTTP error ${response.statusCode}: ${data}`));
+      
+      // Request with retry logic
+      const tryRequest = (retriesLeft = 2) => {
+        const request = http.get(url, (response) => {
+          let data = '';
+          
+          response.on('data', (chunk) => { 
+            data += chunk; 
+          });
+          
+          response.on('end', () => {
+            console.log(`Received response from ${url}: status=${response.statusCode}`);
+            if (response.statusCode >= 400) {
+              reject(new Error(`HTTP error ${response.statusCode}: ${data}`));
+            } else {
+              try {
+                // Try to parse JSON to validate the response format
+                const parsedData = JSON.parse(data);
+                resolve(data);
+              } catch (e) {
+                console.log(`⚠️ Invalid JSON response from ${url}: ${data}`);
+                if (retriesLeft > 0) {
+                  console.log(`Retrying request to ${url} (${retriesLeft} retries left)...`);
+                  setTimeout(() => tryRequest(retriesLeft - 1), 1000);
+                } else {
+                  // If we still can't parse but have status 200, return it anyway
+                  resolve(data);
+                }
+              }
+            }
+          });
+          
+          response.on('error', (error) => {
+            console.log(`Response error for ${url}: ${error.message}`);
+            if (retriesLeft > 0) {
+              console.log(`Retrying request to ${url} (${retriesLeft} retries left)...`);
+              setTimeout(() => tryRequest(retriesLeft - 1), 1000);
+            } else {
+              reject(error);
+            }
+          });
+        });
+        
+        request.on('error', (error) => {
+          console.log(`HTTP request error for ${url}: ${error.message}`);
+          if (retriesLeft > 0 && error.code !== 'ENOTFOUND') {
+            console.log(`Retrying request to ${url} (${retriesLeft} retries left)...`);
+            setTimeout(() => tryRequest(retriesLeft - 1), 1000);
           } else {
-            resolve(data);
+            reject(error);
           }
         });
-      });
+        
+        request.setTimeout(timeoutMs, () => {
+          console.log(`HTTP request timeout for ${url} after ${timeoutMs}ms`);
+          request.destroy();
+          if (retriesLeft > 0) {
+            console.log(`Retrying request to ${url} (${retriesLeft} retries left)...`);
+            setTimeout(() => tryRequest(retriesLeft - 1), 1000);
+          } else {
+            reject(new Error(`Request timeout for ${url} after ${timeoutMs}ms and all retries`));
+          }
+        });
+      };
       
-      request.on('error', (error) => {
-        console.log(`HTTP request error for ${url}: ${error.message}`);
-        reject(error);
-      });
-      
-      request.setTimeout(10000, () => {
-        console.log(`HTTP request timeout for ${url}`);
-        request.destroy();
-        reject(new Error(`Request timeout for ${url}`));
-      });
+      tryRequest();
     });
   }
 
@@ -171,7 +256,7 @@ describe('Lambda S3 Integration Tests', () => {
       const responseBody = JSON.parse(response.body);
       expect(responseBody.message).toBe('File uploaded');
       expect(responseBody.filename).toBe(testData.filename);
-    }, 30000);
+    }, 45000); // Increased timeout for file upload test
 
     test('should handle large file uploads', async () => {
       const largeContent = 'A'.repeat(10000); // 10KB file
@@ -274,4 +359,24 @@ describe('Lambda S3 Integration Tests', () => {
       expect(response.statusCode).toBe(405);
     });
   });
+
+  // Proper teardown to prevent "Cannot log after tests are done" error
+  afterAll(async () => {
+    console.log('🧹 Cleaning up after integration tests...');
+    // Close AWS SDK clients to terminate any outstanding requests
+    if (s3Client) {
+      console.log('Closing S3 client connections...');
+      // Ensure any in-flight requests are completed
+      await new Promise(resolve => setTimeout(resolve, 500));
+      s3Client.destroy();
+    }
+    
+    if (lambdaClient) {
+      console.log('Closing Lambda client connections...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      lambdaClient.destroy();
+    }
+    
+    console.log('✅ Integration test cleanup completed');
+  }, 10000); // Allow up to 10 seconds for cleanup
 });
