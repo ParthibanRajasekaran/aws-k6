@@ -305,7 +305,8 @@ jobs:
             health_response=$(curl -s http://localhost:4566/_localstack/health || echo '{"error": "Connection failed"}')
             echo "$health_response" | jq '.'
             
-            if echo "$health_response" | jq -e '.services.lambda == "available" && .services.s3 == "available"' >/dev/null; then
+            # Fix jq expression quoting
+            if echo "$health_response" | jq -e '.services.lambda == "available" and .services.s3 == "available"' >/dev/null; then
               break
             fi
             
@@ -371,10 +372,45 @@ jobs:
           echo "📦 Creating S3 bucket..."
           aws --endpoint-url=$ENDPOINT s3 mb s3://$BUCKET || echo "Bucket might already exist"
           aws --endpoint-url=$ENDPOINT s3api put-bucket-acl --bucket $BUCKET --acl public-read || echo "Setting ACL failed"
-          # Prepare Lambda for manual deployment
-          echo "🛠️ Preparing Lambda deployment package..."
-          cd lambda && zip -r ../function.zip . && cd ..
+          # Prepare Lambda for manual deployment with all dependencies
+          echo "🛠️ Preparing Lambda deployment package with dependencies..."
+          # Install archiver for reliable zipping in CI environment
+          npm install archiver
+          # Clear any existing zip file
+          rm -f function.zip || true
+          
+          # Use our enhanced Lambda packaging script with fallback mechanism
+          echo "Attempting to package Lambda with main script..."
+          if NODE_DEBUG=module node scripts/package-lambda.js; then
+            echo "✅ Main packaging script completed successfully"
+          else
+            echo "⚠️ Main packaging script failed, using emergency packaging..."
+            node scripts/emergency-package.js
+          fi
+          
+          # Verify the package contains the required dependencies
+          echo "📦 Verifying Lambda package contents..."
+          if unzip -l function.zip | grep -q "node_modules/lru-cache"; then
+            echo "✅ Package contains lru-cache dependency"
+          else
+            echo "❌ ERROR: lru-cache dependency missing from package"
+            exit 1
+          fi
+          
+          if unzip -l function.zip | grep -q "node_modules/@aws-sdk"; then
+            echo "✅ Package contains AWS SDK dependencies"
+          else
+            echo "❌ ERROR: AWS SDK dependencies missing from package"
+            exit 1
+          fi
+          
+          # Show the package information
           ls -la function.zip
+          
+          # Run the verification script
+          echo "🔍 Running Lambda package verification..."
+          chmod +x scripts/verify-lambda.js
+          node scripts/verify-lambda.js
           # Deploy Lambda function manually first to ensure it works
           echo "🛠️ Manually deploying Lambda function..."
           for i in {1..3}; do
@@ -384,10 +420,24 @@ jobs:
               --role arn:aws:iam::000000000000:role/lambda-role \
               --handler index.handler \
               --zip-file fileb://function.zip \
+              --timeout 30 \
+              --memory-size 256 \
               && break || echo "Lambda may already exist or failed (attempt $i)";
             echo "LocalStack logs for debugging Lambda creation:";
             localstack logs | tail -n 100;
-            sleep 10;
+            sleep 15;
+          done
+          
+          # Give Lambda time to initialize and become active
+          echo "⏳ Waiting for Lambda function to become active..."
+          for i in {1..10}; do
+            status=$(aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda --query 'Configuration.State' --output text 2>/dev/null || echo "Unknown")
+            echo "Lambda status: $status (attempt $i of 10)"
+            if [ "$status" == "Active" ]; then
+              echo "✅ Lambda is active and ready"
+              break
+            fi
+            sleep 10
           done
           # Now run the regular deployment script
           echo "📦 Running deployment script..."
@@ -442,10 +492,33 @@ jobs:
         run: |
           set -e
           echo "Using BUCKET=$BUCKET and ENDPOINT=$ENDPOINT for integration tests"
+          
+          # For diagnostics: show environment variables that will be used
+          echo "Environment configuration:"
+          echo "ENDPOINT=$ENDPOINT"
+          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+          echo "AWS_REGION=$AWS_REGION"
+          echo "BUCKET=$BUCKET"
+          echo "LOCALSTACK_HOST=$LOCALSTACK_HOST"
+          
           echo "🔍 Creating test file and uploading to S3..."
           echo "This is a test file for integration tests" > test.txt
           aws --endpoint-url=$ENDPOINT s3 cp test.txt s3://$BUCKET/test.txt || { echo "S3 upload failed"; exit 1; }
           aws --endpoint-url=$ENDPOINT s3 ls s3://$BUCKET/ || { echo "S3 ls failed"; exit 1; }
+          
+          # Wait for Lambda to be fully active before testing
+          echo "⏳ Waiting for Lambda function to become active..."
+          for i in {1..10}; do
+            status=$(aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda --query 'Configuration.State' --output text 2>/dev/null || echo "Unknown")
+            echo "Lambda status: $status (attempt $i of 10)"
+            if [ "$status" == "Active" ]; then
+              echo "✅ Lambda is active and ready"
+              break
+            fi
+            sleep 5
+          done
+          
           echo "🧪 Testing Lambda with S3 access..."
           aws --endpoint-url=$ENDPOINT lambda invoke \
             --function-name test-lambda \
@@ -457,14 +530,27 @@ jobs:
           echo "🔍 Inspecting Lambda configuration..."
           aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda || { echo "Cannot get Lambda config"; exit 1; }
           echo "🧪 Running integration tests with extended timeout and debug..."
+          # First check what tests are available
+          echo "Available integration tests:"
+          find tests/integration -name "*.integration.test.js" -type f
+          
+          # Run the integration tests with correct configuration
+          LOCALSTACK_HOST=localhost \
+          AWS_ACCESS_KEY_ID=test \
+          AWS_SECRET_ACCESS_KEY=test \
+          AWS_REGION=us-east-1 \
+          ENDPOINT=$ENDPOINT \
+          BUCKET=$BUCKET \
+          DEBUG=aws-sdk*,jest \
+          NODE_DEBUG=fs \
           npx jest \
             --runInBand \
             --verbose \
-            --projects=integration \
             --testMatch="**/tests/integration/**/*.integration.test.js" \
             --testTimeout=300000 \
             --forceExit \
             --detectOpenHandles \
+            --no-cache \
             --reporters=default \
             --reporters=jest-junit || { echo "Integration tests failed"; exit 1; }
 
