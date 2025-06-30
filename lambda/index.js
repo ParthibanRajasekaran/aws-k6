@@ -7,7 +7,9 @@ const BUCKET = process.env.BUCKET || 'test-bucket';
 // Configure connection pooling for S3 client
 const s3Client = new S3Client({
   region: REGION,
-  endpoint: process.env.ENDPOINT || (process.env.LOCALSTACK_HOST ? `http://${process.env.LOCALSTACK_HOST}:4566` : 'http://localhost:4566'),
+  // In Docker/CI environment, LOCALSTACK_HOST should be set to 'localstack'
+  // This allows cross-container communication via Docker's DNS
+  endpoint: process.env.ENDPOINT || (process.env.LOCALSTACK_HOST ? `http://${process.env.LOCALSTACK_HOST}:4566` : 'http://localstack:4566'),
   forcePathStyle: true,
   credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
   maxConnections: 50,  // Increase max connections

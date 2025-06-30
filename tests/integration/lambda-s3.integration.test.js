@@ -8,7 +8,8 @@ const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const http = require('http');
 
 // LocalStack configuration
-const LOCALSTACK_ENDPOINT = process.env.ENDPOINT || 'http://localhost:4566';
+const LOCALSTACK_HOST = process.env.LOCALSTACK_HOST || 'localstack';
+const LOCALSTACK_ENDPOINT = process.env.ENDPOINT || `http://${LOCALSTACK_HOST}:4566`;
 const REGION = process.env.AWS_REGION || 'us-east-1';
 const BUCKET_NAME = process.env.BUCKET || 'test-bucket';
 

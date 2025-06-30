@@ -281,14 +281,18 @@ jobs:
             LAMBDA_EXECUTOR=docker
             LAMBDA_REMOVE_CONTAINERS=0
             EAGER_SERVICE_LOADING=1
-            HOSTNAME_EXTERNAL=localhost
-            LOCALSTACK_HOST=localhost
+            HOSTNAME_EXTERNAL=localstack
+            LOCALSTACK_HOST=localstack
             DOCKER_HOST=unix:///var/run/docker.sock
             LAMBDA_REMOTE_DOCKER=0
             LAMBDA_INIT_DELAYER=0
             LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
             SYNCHRONOUS_KINESIS_EVENTS=1
             SYNCHRONOUS_SNS_EVENTS=1
+            # Allow Lambda container to access LocalStack services through Docker network
+            LAMBDA_DOCKER_NETWORK=host
+            # Pass service endpoint to Lambda container
+            LAMBDA_DOCKER_FLAGS="-e LOCALSTACK_HOST=localstack -e ENDPOINT=http://localstack:4566"
             BUCKET_MARKER_LOCAL=test-bucket
         env:
           AWS_DEFAULT_REGION: us-east-1
@@ -451,6 +455,7 @@ jobs:
               --zip-file fileb://function.zip \
               --timeout 30 \
               --memory-size 256 \
+              --environment "Variables={LOCALSTACK_HOST=localstack,ENDPOINT=http://localstack:4566,BUCKET=$BUCKET}" \
               && break || echo "Lambda may already exist or failed (attempt $i)";
             echo "LocalStack logs for debugging Lambda creation:";
             localstack logs | tail -n 100;
@@ -472,7 +477,7 @@ jobs:
           echo "📦 Running deployment script..."
           for i in {1..3}; do
             echo "Deployment attempt $i of 3"
-            if LOCALSTACK_HOST=localhost \
+            if LOCALSTACK_HOST=localstack \
                AWS_ACCESS_KEY_ID=test \
                AWS_SECRET_ACCESS_KEY=test \
                AWS_REGION=us-east-1 \
@@ -564,11 +569,11 @@ jobs:
           find tests/integration -name "*.integration.test.js" -type f
           
           # Run the integration tests with correct configuration
-          LOCALSTACK_HOST=localhost \
+          LOCALSTACK_HOST=localstack \
           AWS_ACCESS_KEY_ID=test \
           AWS_SECRET_ACCESS_KEY=test \
           AWS_REGION=us-east-1 \
-          ENDPOINT=$ENDPOINT \
+          ENDPOINT=http://localstack:4566 \
           BUCKET=$BUCKET \
           DEBUG=aws-sdk*,jest \
           NODE_DEBUG=fs \
