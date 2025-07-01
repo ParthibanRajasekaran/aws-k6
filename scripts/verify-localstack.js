@@ -1,6 +1,14 @@
 /**
  * LocalStack Connectivity Verification Tool
  * Tests each service endpoint and reports status
+ * 
+ * This script provides enhanced diagnostics for LocalStack connectivity issues:
+ * - Fail-fast behavior for critical services (S3, Lambda)
+ * - Detailed error reporting and troubleshooting guidance
+ * - Consistent endpoint configuration across environments
+ * 
+ * Usage:
+ *   ENDPOINT=http://localhost:4566 REGION=us-east-1 node scripts/verify-localstack.js
  */
 
 const { S3Client, ListBucketsCommand } = require('@aws-sdk/client-s3');

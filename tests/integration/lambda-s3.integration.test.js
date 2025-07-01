@@ -1,6 +1,14 @@
 /**
  * Integration tests for Lambda with S3 using LocalStack
- * These tests actually connect to LocalStack to verify end-to-end functionality
+ * 
+ * These tests verify end-to-end functionality by connecting to LocalStack.
+ * 
+ * Features:
+ * - Robust LocalStack connectivity with retry logic
+ * - Proper async cleanup to prevent Jest hanging
+ * - Environment variable consistency (localhost for runner, localstack for containers)
+ * - Extended timeouts for CI environments
+ * - Comprehensive error handling and logging
  */
 
 const { S3Client, CreateBucketCommand, ListBucketsCommand } = require('@aws-sdk/client-s3');

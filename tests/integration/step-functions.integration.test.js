@@ -1,4 +1,19 @@
 
+/**
+ * Step Functions Integration Tests
+ * 
+ * Tests the complete Step Functions workflow including:
+ * - Lambda function deployment and execution
+ * - State machine creation and execution
+ * - DynamoDB data persistence
+ * 
+ * Features:
+ * - Async setup/teardown with proper error handling
+ * - Timeout management for CI environments  
+ * - Resource cleanup with graceful failure handling
+ * - Environment variable consistency
+ */
+
 const {
   SFNClient,
   StartExecutionCommand,
