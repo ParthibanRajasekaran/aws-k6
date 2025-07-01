@@ -129,25 +129,65 @@ function testAPIGateway() {
 
 async function runAllTests() {
   console.log('🔍 Running LocalStack connectivity tests...\n');
+  console.log(`⚙️ Configuration:`);
+  console.log(`   Endpoint: ${endpoint}`);
+  console.log(`   Region: ${region}`);
+  console.log(`   Time: ${new Date().toISOString()}\n`);
   
-  const s3Success = await testS3();
-  const lambdaSuccess = await testLambda();
-  const sfnSuccess = await testStepFunctions();
-  const apiGatewaySuccess = await testAPIGateway();
+  const results = {};
+  
+  // Test core services first (fail fast)
+  console.log('🚀 Testing core services (S3, Lambda)...');
+  results.s3 = await testS3();
+  results.lambda = await testLambda();
+  
+  // If core services fail, exit immediately
+  if (!results.s3 || !results.lambda) {
+    console.log('\n❌ Core services (S3, Lambda) failed - stopping tests');
+    console.log('\n📊 Quick Connectivity Test Summary:');
+    console.log(`S3: ${results.s3 ? '✅ Connected' : '❌ Failed'}`);
+    console.log(`Lambda: ${results.lambda ? '✅ Connected' : '❌ Failed'}`);
+    console.log('\n⚠️ Please ensure LocalStack is running and accessible at:', endpoint);
+    console.log('💡 Try running: docker-compose up -d localstack');
+    process.exit(1);
+  }
+  
+  // Test additional services
+  console.log('\n🔄 Core services OK - testing additional services...');
+  results.stepFunctions = await testStepFunctions();
+  results.apiGateway = await testAPIGateway();
   
   console.log('\n📊 Connectivity Test Summary:');
-  console.log(`S3: ${s3Success ? '✅ Connected' : '❌ Failed'}`);
-  console.log(`Lambda: ${lambdaSuccess ? '✅ Connected' : '❌ Failed'}`);
-  console.log(`Step Functions: ${sfnSuccess ? '✅ Connected' : '❌ Failed'}`);
-  console.log(`API Gateway Sim: ${apiGatewaySuccess ? '✅ Connected' : '❌ Failed'}`);
+  console.log(`S3: ${results.s3 ? '✅ Connected' : '❌ Failed'}`);
+  console.log(`Lambda: ${results.lambda ? '✅ Connected' : '❌ Failed'}`);
+  console.log(`Step Functions: ${results.stepFunctions ? '✅ Connected' : '❌ Failed'}`);
+  console.log(`API Gateway Sim: ${results.apiGateway ? '✅ Connected' : '❌ Failed'}`);
   
-  if (!s3Success || !lambdaSuccess || !apiGatewaySuccess) {
-    console.log('\n⚠️  Some services are not accessible! Please check your LocalStack setup.');
+  // Check if critical services are working
+  const criticalServices = [results.s3, results.lambda];
+  const allCriticalWorking = criticalServices.every(Boolean);
+  
+  if (!allCriticalWorking) {
+    console.log('\n❌ Critical services failed! LocalStack setup issues detected.');
+    console.log('\n🔧 Troubleshooting steps:');
+    console.log('1. Check if LocalStack is running: curl http://localhost:4566/_localstack/health');
+    console.log('2. Restart LocalStack: docker-compose down && docker-compose up -d');
+    console.log('3. Check LocalStack logs: docker-compose logs localstack');
     process.exit(1);
-  } else {
-    console.log('\n🎉 All services are accessible and ready for testing!');
-    process.exit(0);
   }
+  
+  // Warn about non-critical service failures
+  if (!results.stepFunctions) {
+    console.log('\n⚠️ Step Functions not accessible - some tests may fail');
+  }
+  
+  if (!results.apiGateway) {
+    console.log('\n⚠️ API Gateway simulation not running - start with: npm start');
+  }
+  
+  console.log('\n🎉 Critical services are accessible and ready for testing!');
+  console.log('✅ LocalStack connectivity verification passed');
+  process.exit(0);
 }
 
 runAllTests().catch(err => {

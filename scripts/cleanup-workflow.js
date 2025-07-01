@@ -78,25 +78,74 @@ async function deleteStateMachine() {
   }
 }
 
-const cleanup = () => {
-  console.log("Cleaning up Step Functions workflow...");
-  try {
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 stepfunctions delete-state-machine --state-machine-arn arn:aws:states:us-east-1:000000000000:stateMachine:MyStateMachine", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda1", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda2", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda3", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 dynamodb delete-table --table-name workflow-results", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name lambda-ex --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name lambda-ex", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name StepFunctionsRole --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy", { stdio: "inherit" });
-    execSync("aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name StepFunctionsRole", { stdio: "inherit" });
-    console.log("Cleanup successful.");
-  } catch (error) {
-    console.error("Cleanup failed:", error);
-    // Do not exit with error code, as some resources might have been already deleted
+const cleanup = async () => {
+  console.log("🧹 Cleaning up Step Functions workflow...");
+  
+  const cleanupCommands = [
+    {
+      name: "Delete State Machine",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 stepfunctions delete-state-machine --state-machine-arn arn:aws:states:us-east-1:000000000000:stateMachine:MyStateMachine"
+    },
+    {
+      name: "Delete Lambda Function 1",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda1"
+    },
+    {
+      name: "Delete Lambda Function 2", 
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda2"
+    },
+    {
+      name: "Delete Lambda Function 3",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 lambda delete-function --function-name lambda3"
+    },
+    {
+      name: "Delete DynamoDB Table",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 dynamodb delete-table --table-name workflow-results"
+    },
+    {
+      name: "Detach DynamoDB Policy from Lambda Role",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name lambda-ex --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy"
+    },
+    {
+      name: "Delete DynamoDB Policy",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/DynamoDBWritePolicy"
+    },
+    {
+      name: "Delete Lambda Role",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name lambda-ex"
+    },
+    {
+      name: "Detach Lambda Invoke Policy from Step Functions Role", 
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam detach-role-policy --role-name StepFunctionsRole --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy"
+    },
+    {
+      name: "Delete Lambda Invoke Policy",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-policy --policy-arn arn:aws:iam::000000000000:policy/LambdaInvokePolicy"
+    },
+    {
+      name: "Delete Step Functions Role",
+      command: "aws --endpoint-url=http://localhost:4566 --region us-east-1 iam delete-role --role-name StepFunctionsRole"
+    }
+  ];
+
+  let successCount = 0;
+  let warningCount = 0;
+
+  for (const { name, command } of cleanupCommands) {
+    try {
+      console.log(`🗑️ ${name}...`);
+      execSync(command, { stdio: "pipe" }); // Use pipe to suppress output
+      console.log(`✅ ${name} completed`);
+      successCount++;
+    } catch (error) {
+      // Most cleanup errors are expected (resources already deleted)
+      console.warn(`⚠️ ${name} failed (resource may not exist): ${error.message.split('\n')[0]}`);
+      warningCount++;
+    }
   }
+  
+  console.log(`📊 Cleanup summary: ${successCount} successful, ${warningCount} warnings`);
+  console.log("✅ Cleanup process completed");
 };
 
 (async () => {
@@ -110,9 +159,11 @@ const cleanup = () => {
     if (!args["skip-stepfn"]) await deleteStateMachine();
     else console.log("⏭️  Skipping Step Function deletion");
 
-    console.log("✅ Cleanup complete.");
+    console.log("✅ SDK-based cleanup complete.");
   } catch (err) {
-    console.error("❌ Cleanup failed:", err.message);
+    console.error("❌ SDK-based cleanup failed:", err.message);
   }
-  cleanup();
+  
+  // Run additional AWS CLI cleanup to ensure everything is cleaned up
+  await cleanup();
 })();

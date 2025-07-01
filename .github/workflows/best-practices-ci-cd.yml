@@ -302,29 +302,37 @@ jobs:
           
       - name: Wait for LocalStack
         run: |
-          echo "Waiting for LocalStack health check..."
-          # Use increasing timeout with more detailed logging
-          for i in {1..30}; do
-            echo "Health check attempt $i of 30..."
-            health_response=$(curl -s http://localhost:4566/_localstack/health || echo '{"error": "Connection failed"}')
-            echo "$health_response" | jq '.'
+          echo "🔍 Waiting for LocalStack to be ready..."
+          echo "Using enhanced LocalStack verification script..."
+          
+          # Run our enhanced verification script with retries
+          max_attempts=6
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "LocalStack verification attempt $attempt of $max_attempts..."
             
-            # Fix jq expression quoting
-            if echo "$health_response" | jq -e '.services.lambda == "available" and .services.s3 == "available"' >/dev/null; then
+            if ENDPOINT=http://localhost:4566 REGION=us-east-1 node scripts/verify-localstack.js; then
+              echo "✅ LocalStack verification passed!"
               break
+            else
+              echo "⚠️ LocalStack verification failed on attempt $attempt"
+              if [ $attempt -eq $max_attempts ]; then
+                echo "❌ LocalStack failed to become ready after $max_attempts attempts"
+                echo "🔍 Debugging information:"
+                curl -s http://localhost:4566/_localstack/health | jq '.' || echo "Health endpoint unreachable"
+                exit 1
+              fi
+              echo "⏳ Waiting 15 seconds before retry..."
+              sleep 15
+              attempt=$((attempt + 1))
             fi
-            
-            sleep 5
           done
           
           # Additional verification of service readiness
-          echo "🔍 Verifying core service readiness..."
-          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-readiness-check || echo "Bucket operation attempted"
-          aws --endpoint-url=http://localhost:4566 lambda list-functions || echo "Lambda list attempted"
-          
-          # Extra wait for services to stabilize
-          echo "⏳ Allowing extra time for services to stabilize..."
-          sleep 15
+          echo "🔍 Additional service readiness verification..."
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-readiness-check || echo "✅ Bucket operation attempted"
+          aws --endpoint-url=http://localhost:4566 lambda list-functions || echo "✅ Lambda list attempted"
           
       - name: Verify LocalStack Services
         run: |
@@ -395,9 +403,12 @@ jobs:
           aws --endpoint-url=$ENDPOINT lambda list-functions || true
           echo "If nodejs20.x is not supported, update LocalStack image."
 
-      # Deploy Test Infrastructure
+      # Deploy Test Infrastructure - Only proceed after LocalStack is verified
       - name: Deploy Test Infrastructure
         run: |
+          echo "🚀 Starting test infrastructure deployment..."
+          echo "📋 Prerequisites verified: LocalStack services are ready"
+          
           # Verify AWS CLI is working correctly with LocalStack
           echo "🧪 Testing AWS CLI with LocalStack..."
           aws --endpoint-url=$ENDPOINT sts get-caller-identity
@@ -569,11 +580,13 @@ jobs:
           find tests/integration -name "*.integration.test.js" -type f
           
           # Run the integration tests with correct configuration
-          LOCALSTACK_HOST=localstack \
+          # Note: Use localhost for runner context, but tests will internally handle
+          # Docker container networking (localstack hostname) as needed
+          LOCALSTACK_HOST=localhost \
           AWS_ACCESS_KEY_ID=test \
           AWS_SECRET_ACCESS_KEY=test \
           AWS_REGION=us-east-1 \
-          ENDPOINT=http://localstack:4566 \
+          ENDPOINT=http://localhost:4566 \
           BUCKET=$BUCKET \
           DEBUG=aws-sdk*,jest \
           NODE_DEBUG=fs \
