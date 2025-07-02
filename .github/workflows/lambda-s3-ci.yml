@@ -1,0 +1,214 @@
+name: Lambda S3 CI
+
+# Trigger Configuration - Only run for relevant files
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'hotfix/**' ]
+    paths:
+      - 'lambda/**'
+      - 'tests/unit/lambda/**'
+      - 'run-critical-tests.sh'
+      - 'api-gateway-sim.js'
+      - 'k6/get-test.js'
+      - 'k6/post-test.js'
+      - '.github/workflows/lambda-s3-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'lambda/**'
+      - 'tests/unit/lambda/**'
+      - 'run-critical-tests.sh'
+      - 'api-gateway-sim.js'
+      - 'k6/get-test.js'
+      - 'k6/post-test.js'
+  workflow_dispatch:
+    inputs:
+      skip_performance:
+        description: 'Skip performance tests'
+        required: false
+        default: false
+        type: boolean
+
+# Global environment variables
+env:
+  NODE_VERSION: '20'
+  AWS_DEFAULT_REGION: us-east-1
+  BUCKET_NAME: test-bucket-${{ github.run_id }}
+  LOCALSTACK_HOST: localhost
+  
+# Concurrency control - prevent duplicate runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Security - minimal permissions
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # Job 1: Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci
+        
+      - name: Run Critical Tests
+        run: |
+          chmod +x ./run-critical-tests.sh
+          ./run-critical-tests.sh
+          
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: reports/coverage/
+          retention-days: 7
+
+  # Job 2: Integration Tests with LocalStack
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [unit-tests]
+    env:
+      ENDPOINT: http://localhost:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci
+        
+      # Start LocalStack
+      - name: Start LocalStack
+        run: docker compose up -d
+        
+      - name: Wait for LocalStack
+        run: |
+          chmod +x ./scripts/wait-for-services.sh
+          ./scripts/wait-for-services.sh --host=localhost --port=4566 --service=LocalStack --timeout=60
+        
+      - name: Verify LocalStack Setup
+        run: |
+          chmod +x ./verify-setup.sh
+          ./verify-setup.sh
+        
+      # Deploy Lambda to LocalStack
+      - name: Deploy to LocalStack
+        run: npm run deploy:localstack
+        
+      - name: Start API Gateway Simulation
+        run: |
+          npm run start &
+          sleep 5
+          ./scripts/wait-for-services.sh --host=localhost --port=3000 --service=APIGateway --timeout=30
+          
+      - name: Test S3 Upload/Download
+        run: |
+          # Test upload
+          curl -X POST -F "file=@test.txt" http://localhost:3000/upload -v
+          # Test download
+          curl -X GET "http://localhost:3000/download?filename=test.txt" -o downloaded.txt -v
+          # Verify file content
+          cat downloaded.txt
+          
+      - name: Dump LocalStack Logs
+        if: always()
+        run: docker compose logs
+        
+      - name: Cleanup
+        if: always()
+        run: docker compose down
+
+  # Job 3: Performance Tests with K6
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [integration-tests]
+    if: ${{ github.event_name != 'pull_request' && github.event.inputs.skip_performance != 'true' }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci
+        
+      # Start LocalStack
+      - name: Start LocalStack
+        run: docker compose up -d
+        
+      - name: Wait for LocalStack
+        run: |
+          chmod +x ./scripts/wait-for-services.sh
+          ./scripts/wait-for-services.sh --host=localhost --port=4566 --service=LocalStack --timeout=60
+          
+      # Deploy Lambda to LocalStack
+      - name: Deploy to LocalStack
+        run: npm run deploy:localstack
+        
+      - name: Start API Gateway Simulation
+        run: |
+          npm run start &
+          sleep 5
+          ./scripts/wait-for-services.sh --host=localhost --port=3000 --service=APIGateway --timeout=30
+      
+      # Install and setup K6
+      - name: Setup K6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/v0.47.0/k6-v0.47.0-linux-amd64.tar.gz | tar xz
+          sudo cp k6-v0.47.0-linux-amd64/k6 /usr/local/bin
+          
+      # Run performance tests
+      - name: Run POST Performance Tests
+        run: k6 run k6/post-test.js
+        
+      - name: Run GET Performance Tests
+        run: k6 run k6/get-test.js
+        
+      - name: Upload Performance Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-results
+          path: |
+            reports/post-test/
+            reports/get-test/
+          retention-days: 7
+          
+      - name: Cleanup
+        if: always()
+        run: docker compose down
