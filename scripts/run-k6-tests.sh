@@ -70,7 +70,6 @@ K6_ARGS=()
 
 # Add output options
 K6_ARGS+=("--out" "json=${REPORT_DIR}/${TEST_NAME}-results.json")
-K6_ARGS+=("--out" "web-dashboard=${REPORT_DIR}/dashboard")
 
 # Add VUs if specified
 if [ ! -z "$VUS" ]; then

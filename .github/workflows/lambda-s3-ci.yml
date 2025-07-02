@@ -194,10 +194,10 @@ jobs:
           
       # Run performance tests
       - name: Run POST Performance Tests
-        run: k6 run k6/post-test.js
+        run: k6 run --out json=post-results.json k6/post-test.js
         
       - name: Run GET Performance Tests
-        run: k6 run k6/get-test.js
+        run: k6 run --out json=get-results.json k6/get-test.js
         
       - name: Upload Performance Results
         uses: actions/upload-artifact@v4
@@ -205,6 +205,7 @@ jobs:
         with:
           name: k6-results
           path: |
+            *-results.json
             reports/post-test/
             reports/get-test/
           retention-days: 7

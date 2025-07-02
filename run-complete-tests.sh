@@ -133,7 +133,6 @@ run_lambda_s3_tests() {
         
         if k6 run \
             --out json="$output_file" \
-            --out web-dashboard="reports/lambda-s3/${test_name}-dashboard" \
             "$test_file"; then
             success "$test_name test completed successfully"
             test_results+=("$test_name:PASS")
@@ -165,7 +164,6 @@ run_step_function_tests() {
         
         if k6 run \
             --out json="$output_file" \
-            --out web-dashboard="reports/step-functions/${test_name}-dashboard" \
             "$test_file"; then
             success "$test_name test completed successfully"
             test_results+=("$test_name:PASS")

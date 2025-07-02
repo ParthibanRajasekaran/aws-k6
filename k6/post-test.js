@@ -3,7 +3,6 @@ import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 import { 
-  config, 
   getBaseUrl, 
   enhancedMetrics, 
   generateTestFile, 
@@ -26,7 +25,6 @@ function randomString(length = 8) {
 
 // Use the config, but override some options for post-specific needs
 export const options = {
-  ...config,
   stages: [
     { duration: '10s', target: 5 },     // Gentle warm-up
     { duration: '30s', target: 30 },    // Ramp-up 
@@ -35,10 +33,12 @@ export const options = {
     { duration: '30s', target: 0 },     // Gradual ramp-down
   ],
   thresholds: {
-    ...config.thresholds,
     'upload_duration': ['p(95)<3000'],   // 95% of uploads within 3s
     'upload_failures': ['rate<0.01'],    // Less than 1% upload failures
     'retries': ['count<50'],            // Alert if we have too many retries
+    'download_duration': ['p(95)<2000'],
+    'download_failures': ['rate<0.01'],
+    'http_req_duration': ['p(95)<2000']
   },
   // Additional performance optimizations
   userAgent: 'K6PerformanceTest/1.0',

@@ -36,6 +36,9 @@ coverage/
 get-results.json
 post-results.json
 
+# K6 binary
+k6-*
+
 # AI tooling
 .github/copilot*
 .copilot*
