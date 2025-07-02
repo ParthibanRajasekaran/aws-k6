@@ -1,0 +1,82 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=lambda,s3,iam
+      - DEFAULT_REGION=us-east-1
+      - DEBUG=1
+      - LS_LOG=warn
+      - LAMBDA_EXECUTOR=local
+      - PERSISTENCE=false
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - HOSTNAME_EXTERNAL=localstack # Ensures external hostname is correctly set
+      - LAMBDA_DOCKER_FLAGS=-v /var/run/docker.sock:/var/run/docker.sock -e LOCALSTACK_HOST=localstack
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack-s3-data:/var/lib/localstack"
+    networks:
+      - lambda_s3_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - LOCALSTACK_HOST=localstack
+      - ENDPOINT=http://localstack:4566
+      - BUCKET=test-bucket
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./:/app
+      - /app/node_modules # Avoid overriding node_modules with local filesystem
+    depends_on:
+      - localstack
+    networks:
+      - lambda_s3_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # For connecting to the host machine if needed
+
+  k6-lambda-s3:
+    image: grafana/k6:latest
+    container_name: k6-lambda-s3
+    volumes:
+      - ./k6:/scripts
+      - ./reports:/reports
+    environment:
+      - K6_OUT=json=/reports/lambda-s3/results.json
+      - API_URL=http://api-gateway:3000
+      - LOCALSTACK_HOST=localstack
+      - ENDPOINT=http://localstack:4566
+    depends_on:
+      - api-gateway
+      - localstack
+    networks:
+      - lambda_s3_net
+    command: ["run", "--summary-export=/reports/lambda-s3/summary.json", "/scripts/post-test.js"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # For connecting to the host machine if needed
+
+networks:
+  lambda_s3_net:
+    name: lambda_s3_net

@@ -8,10 +8,15 @@ const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const http = require('http');
 
 // LocalStack configuration
-const LOCALSTACK_HOST = process.env.LOCALSTACK_HOST || 'localstack';
+const LOCALSTACK_HOST = process.env.LOCALSTACK_HOST || 'localhost';
+// Support both explicit endpoint and fallback to constructed endpoint with host
 const LOCALSTACK_ENDPOINT = process.env.ENDPOINT || `http://${LOCALSTACK_HOST}:4566`;
 const REGION = process.env.AWS_REGION || 'us-east-1';
 const BUCKET_NAME = process.env.BUCKET || 'test-bucket';
+
+// For debugging DNS issues
+console.log(`Using LocalStack host: ${LOCALSTACK_HOST}`);
+console.log(`Using LocalStack endpoint: ${LOCALSTACK_ENDPOINT}`);
 
 describe('Lambda S3 Integration Tests', () => {
   let s3Client;
@@ -76,10 +81,18 @@ describe('Lambda S3 Integration Tests', () => {
     // Determine whether any of the required services are initialized
     let servicesInitialized = false;
     
+    // Define the fallback hosts to try if initial host fails
+    const fallbackHosts = ['localhost', 'localstack', '127.0.0.1'];
+    let currentHostIndex = 0;
+    let currentEndpoint = LOCALSTACK_ENDPOINT;
+    
+    console.log('Starting LocalStack connection attempts with failover strategy');
+    console.log(`Initial endpoint: ${currentEndpoint}`);
+    
     for (let i = 0; i < maxRetries; i++) {
       try {
-        console.log(`Connecting to LocalStack at: ${LOCALSTACK_ENDPOINT}`);
-        const response = await makeHttpRequest(`${LOCALSTACK_ENDPOINT}/_localstack/health`);
+        console.log(`Connecting to LocalStack at: ${currentEndpoint}`);
+        const response = await makeHttpRequest(currentEndpoint + '/_localstack/health');
         const health = JSON.parse(response);
         console.log(`LocalStack health status: ${JSON.stringify(health)}`);
         
@@ -91,7 +104,33 @@ describe('Lambda S3 Integration Tests', () => {
           // If both services are in any of the operational states
           if ((s3Status === 'available' || s3Status === 'running' || s3Status === 'initialized') && 
               (lambdaStatus === 'available' || lambdaStatus === 'running' || lambdaStatus === 'initialized')) {
-            console.log('✅ LocalStack is ready');
+            console.log(`✅ LocalStack is ready at ${currentEndpoint}`);
+            
+            // Update the endpoint and client configurations if we're using a fallback
+            if (currentEndpoint !== LOCALSTACK_ENDPOINT) {
+              console.log(`🔄 Switching to working endpoint: ${currentEndpoint}`);
+              
+              // Reconfigure clients with the working endpoint
+              const newConfig = {
+                region: REGION,
+                endpoint: currentEndpoint,
+                forcePathStyle: true,
+                credentials: {
+                  accessKeyId: 'test',
+                  secretAccessKey: 'test'
+                },
+                maxAttempts: 10,
+                retryMode: 'adaptive',
+                requestHandler: {
+                  timeoutInMs: 30000
+                }
+              };
+              
+              // Recreate clients with the working endpoint
+              s3Client = new S3Client(newConfig);
+              lambdaClient = new LambdaClient(newConfig);
+            }
+            
             return;
           }
           
@@ -104,6 +143,16 @@ describe('Lambda S3 Integration Tests', () => {
         }
       } catch (error) {
         console.log(`⚠️ LocalStack not ready yet: ${error.message}`);
+        
+        // Try a different hostname if this is a DNS error
+        if ((error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') && 
+            currentHostIndex < fallbackHosts.length - 1) {
+          currentHostIndex++;
+          const newHost = fallbackHosts[currentHostIndex];
+          currentEndpoint = `http://${newHost}:4566`;
+          console.log(`🔄 Trying fallback host: ${currentEndpoint}`);
+          continue;
+        }
       }
       
       // After half the retries, try connecting directly to the services to verify they work

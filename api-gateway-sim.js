@@ -6,19 +6,70 @@ const lambda = require('./lambda/index');
 
 // Use a single process for API Gateway simulation to avoid port binding conflicts
 const app = express();
-  
-  // Increase maximum payload size
-  app.use(bodyParser.json({ limit: '50mb' }));
-  app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
-  // Error handling middleware
-  const errorHandler = (err, req, res, _next) => {
-    console.error('API Error:', err);
-    res.status(500).json({ 
-      error: err.message || 'Internal server error',
-      code: err.name 
+// Add request timeout middleware
+const requestTimeout = 30000; // 30 seconds
+app.use((req, res, next) => {
+  res.setTimeout(requestTimeout, () => {
+    console.error(`Request timeout after ${requestTimeout}ms: ${req.method} ${req.url}`);
+    res.status(408).json({ 
+      error: 'Request timeout',
+      code: 'TIMEOUT_ERROR' 
     });
-  };
+  });
+  next();
+});
+  
+// Increase maximum payload size
+app.use(bodyParser.json({ 
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    try {
+      JSON.parse(buf);
+    } catch (e) {
+      console.error('Invalid JSON in request body');
+      res.status(400).json({ 
+        error: 'Invalid JSON in request body',
+        details: e.message 
+      });
+    }
+  }
+}));
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+
+// Enhanced error handling middleware
+const errorHandler = (err, req, res, _next) => {
+  console.error('API Error:', err);
+  
+  // Check for specific error types
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({ 
+      error: 'Invalid JSON payload',
+      details: err.message 
+    });
+  }
+  
+  if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+    return res.status(500).json({ 
+      error: 'Connection lost during request processing',
+      code: err.code 
+    });
+  }
+  
+  if (err.code === 'ECONNREFUSED') {
+    return res.status(503).json({ 
+      error: 'Backend service unavailable',
+      code: err.code,
+      suggestion: 'LocalStack might not be running'
+    });
+  }
+  
+  res.status(500).json({ 
+    error: err.message || 'Internal server error',
+    code: err.name,
+    timestamp: new Date().toISOString()
+  });
+};
 
   // Health check endpoint
   app.get('/health', (req, res) => {
