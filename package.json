@@ -7,7 +7,6 @@
     "start": "node api-gateway-sim.js",
     "deploy": "npm run deploy:localstack && npm run deploy:workflow",
     "deploy:localstack": "node scripts/deploy-localstack.js",
-    "deploy:lambda-s3": "node scripts/deploy-lambda-s3.js",
     "deploy:workflow": "node scripts/deploy-workflow.js",
     "test": "./run-complete-tests.sh",
     "test:verify": "./verify-setup.sh",
@@ -41,7 +40,8 @@
     "zip:lambda2": "zip -j lambda2.zip lambda2/index.js",
     "zip:lambda3": "zip -j lambda3.zip lambda3/index.js",
     "zip:lambdas": "npm run zip:lambda1 && npm run zip:lambda2 && npm run zip:lambda3",
-    "deploy:stepfn": "aws --endpoint-url=http://localhost:4566 stepfunctions create-state-machine --state-machine-name MyStateMachine --definition file://./state-machine-definition.json --role-arn arn:aws:iam::000000000000:role/StepFunctionsRole"
+    "deploy:stepfn": "aws --endpoint-url=http://localhost:4566 stepfunctions create-state-machine --state-machine-name MyStateMachine --definition file://./state-machine-definition.json --role-arn arn:aws:iam::000000000000:role/StepFunctionsRole",
+    "validate:ci": "./scripts/validate-ci-workflow.sh"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.826.0",

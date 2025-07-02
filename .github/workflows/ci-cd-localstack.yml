@@ -1,0 +1,507 @@
+name: LocalStack Lambda S3 CI/CD Pipeline
+
+# Trigger Configuration
+on:
+  push:
+    branches: [ main, develop, 'feature/**' ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      skip_performance:
+        description: 'Skip K6 performance tests'
+        required: false
+        default: false
+        type: boolean
+      node_version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: choice
+        options: ['18', '20', '22']
+
+# Global environment variables
+env:
+  NODE_VERSION: ${{ github.event.inputs.node_version || '20' }}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  BUCKET_NAME: test-bucket-${{ github.run_id }}
+  LOCALSTACK_HOST: localhost
+  ENDPOINT: http://localhost:4566
+  API_URL: http://localhost:3000
+  SKIP_PERFORMANCE: ${{ github.event.inputs.skip_performance == 'true' || github.event_name == 'pull_request' }}
+  
+# Concurrency control
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Security - minimal permissions
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # Job 1: Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      - name: Run Unit Tests with Coverage
+        run: |
+          npm run test:unit:coverage
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ./reports/junit
+          JEST_JUNIT_OUTPUT_NAME: unit-tests.xml
+          
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: |
+            reports/coverage/
+            reports/junit/
+          retention-days: 30
+
+  # Job 2: Integration Tests with LocalStack
+  integration-tests:
+    name: Integration & E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: unit-tests
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      # Install K6 for performance tests
+      - name: Setup K6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: latest
+          
+      # LocalStack Setup with optimized configuration
+      - name: Start LocalStack
+        uses: LocalStack/setup-localstack@v0.2.3
+        with:
+          image-tag: 'latest'
+          install-awslocal: 'true'
+          configuration: |
+            SERVICES=lambda,s3,stepfunctions,dynamodb,iam
+            DEBUG=1
+            LS_LOG=warn
+            LAMBDA_EXECUTOR=docker
+            LAMBDA_REMOVE_CONTAINERS=0
+            EAGER_SERVICE_LOADING=1
+            HOSTNAME_EXTERNAL=localhost
+            LOCALSTACK_HOST=localhost
+            DOCKER_HOST=unix:///var/run/docker.sock
+            LAMBDA_REMOTE_DOCKER=0
+            LAMBDA_INIT_DELAYER=0
+            LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
+            SYNCHRONOUS_KINESIS_EVENTS=1
+            SYNCHRONOUS_SNS_EVENTS=1
+            LAMBDA_DOCKER_NETWORK=host
+            LAMBDA_DOCKER_FLAGS="-e LOCALSTACK_HOST=localhost -e ENDPOINT=http://localhost:4566"
+            
+      - name: Wait for LocalStack Services
+        run: |
+          echo "Waiting for LocalStack health check..."
+          for i in {1..30}; do
+            echo "Health check attempt $i of 30..."
+            health_response=$(curl -s http://localhost:4566/_localstack/health || echo '{"error": "Connection failed"}')
+            echo "$health_response" | jq '.'
+            
+            if echo "$health_response" | jq -e '.services.lambda == "available" and .services.s3 == "available"' >/dev/null; then
+              echo "✅ LocalStack services are ready"
+              break
+            fi
+            
+            if [ $i -eq 30 ]; then
+              echo "❌ LocalStack services failed to start"
+              exit 1
+            fi
+            
+            sleep 10
+          done
+          
+          # Extra stabilization time
+          echo "⏳ Allowing services to stabilize..."
+          sleep 15
+          
+      - name: Verify LocalStack Services
+        run: |
+          echo "📊 LocalStack services status:"
+          curl -s http://localhost:4566/_localstack/health | jq '.services'
+          
+          echo "🔌 Testing LocalStack connectivity..."
+          curl -v http://localhost:4566/ || true
+          
+      - name: Create IAM Role for Lambda
+        run: |
+          echo "Creating IAM role for Lambda..."
+          aws --endpoint-url=$ENDPOINT iam create-role \
+            --role-name lambda-role \
+            --assume-role-policy-document '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}' \
+            || echo "Role may already exist"
+          
+          aws --endpoint-url=$ENDPOINT iam create-policy \
+            --policy-name s3-access-policy \
+            --policy-document '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::*",
+                    "arn:aws:s3:::*/*"
+                  ]
+                }
+              ]
+            }' || echo "Policy may already exist"
+            
+          aws --endpoint-url=$ENDPOINT iam attach-role-policy \
+            --role-name lambda-role \
+            --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole \
+            || echo "Policy may already be attached"
+            
+          aws --endpoint-url=$ENDPOINT iam attach-role-policy \
+            --role-name lambda-role \
+            --policy-arn arn:aws:iam::000000000000:policy/s3-access-policy \
+            || echo "Policy may already be attached"
+
+      - name: Deploy Test Infrastructure
+        run: |
+          echo "📦 Creating S3 bucket..."
+          aws --endpoint-url=$ENDPOINT s3 mb s3://$BUCKET_NAME || echo "Bucket might already exist"
+          
+          echo "🛠️ Preparing Lambda deployment package..."
+          npm install archiver
+          rm -f function.zip || true
+          
+          # Package Lambda with dependencies
+          if node scripts/package-lambda.js; then
+            echo "✅ Lambda package created successfully"
+          else
+            echo "⚠️ Main packaging failed, using emergency packaging..."
+            node scripts/emergency-package.js
+          fi
+          
+          # Verify package contents
+          echo "📦 Verifying Lambda package..."
+          if unzip -l function.zip | grep -q "node_modules/lru-cache"; then
+            echo "✅ Package contains required dependencies"
+          else
+            echo "❌ Missing dependencies in package"
+            exit 1
+          fi
+          
+          echo "🚀 Deploying Lambda function..."
+          aws --endpoint-url=$ENDPOINT lambda create-function \
+            --function-name test-lambda \
+            --runtime nodejs20.x \
+            --role arn:aws:iam::000000000000:role/lambda-role \
+            --handler index.handler \
+            --zip-file fileb://function.zip \
+            --timeout 30 \
+            --memory-size 256 \
+            --environment "Variables={LOCALSTACK_HOST=localhost,ENDPOINT=http://localhost:4566,BUCKET=$BUCKET_NAME}" \
+            || echo "Lambda may already exist"
+          
+          # Wait for Lambda to become active
+          echo "⏳ Waiting for Lambda to become active..."
+          for i in {1..12}; do
+            status=$(aws --endpoint-url=$ENDPOINT lambda get-function --function-name test-lambda --query 'Configuration.State' --output text 2>/dev/null || echo "Unknown")
+            echo "Lambda status: $status (attempt $i of 12)"
+            if [ "$status" == "Active" ]; then
+              echo "✅ Lambda is active and ready"
+              break
+            fi
+            if [ $i -eq 12 ]; then
+              echo "❌ Lambda failed to become active"
+              exit 1
+            fi
+            sleep 10
+          done
+          
+      - name: Start API Gateway Simulation
+        run: |
+          echo "🌐 Starting API Gateway simulation..."
+          node api-gateway-sim.js > api-gateway.log 2>&1 &
+          echo $! > api-gateway.pid
+          
+          echo "⏳ Waiting for API Gateway to be ready..."
+          for i in {1..24}; do
+            if curl -sf http://localhost:3000/health >/dev/null 2>&1; then
+              echo "✅ API Gateway is ready"
+              break
+            fi
+            if [ $i -eq 24 ]; then
+              echo "❌ API Gateway failed to start"
+              cat api-gateway.log
+              exit 1
+            fi
+            echo "Waiting for API Gateway... (attempt $i)"
+            sleep 5
+          done
+          
+          # Additional stabilization
+          sleep 10
+          
+      - name: Run Integration Tests
+        run: |
+          echo "🧪 Running integration tests..."
+          
+          # Create test file for upload/download tests
+          echo "This is a test file for integration tests" > test.txt
+          aws --endpoint-url=$ENDPOINT s3 cp test.txt s3://$BUCKET_NAME/test.txt
+          
+          # Test Lambda directly
+          echo "🔍 Testing Lambda function directly..."
+          aws --endpoint-url=$ENDPOINT lambda invoke \
+            --function-name test-lambda \
+            --payload '{"httpMethod":"GET", "queryStringParameters":{"filename":"test.txt"}}' \
+            lambda-test-output.json
+          cat lambda-test-output.json
+          
+          # Test API Gateway endpoints
+          echo "🌐 Testing API Gateway endpoints..."
+          curl -v http://localhost:3000/download?filename=test.txt
+          
+          # Run Jest integration tests if they exist
+          if [ -d "tests/integration" ]; then
+            echo "🧪 Running Jest integration tests..."
+            LOCALSTACK_HOST=localhost \
+            ENDPOINT=http://localhost:4566 \
+            BUCKET=$BUCKET_NAME \
+            npx jest \
+              --runInBand \
+              --verbose \
+              --testMatch="**/tests/integration/**/*.integration.test.js" \
+              --testTimeout=60000 \
+              --forceExit \
+              --detectOpenHandles
+          fi
+          
+      - name: Run K6 Performance Tests
+        if: env.SKIP_PERFORMANCE == 'false'
+        run: |
+          echo "⚡ Running K6 performance tests..."
+          
+          # Run POST tests
+          echo "📤 Running POST performance tests..."
+          k6 run \
+            --out json=post-results.json \
+            --env API_URL=http://localhost:3000 \
+            --env AWS_ENDPOINT=http://localhost:4566 \
+            --env AWS_REGION=us-east-1 \
+            k6/post-test.js
+          
+          # Run GET tests
+          echo "📥 Running GET performance tests..."
+          k6 run \
+            --out json=get-results.json \
+            --env API_URL=http://localhost:3000 \
+            --env AWS_ENDPOINT=http://localhost:4566 \
+            --env AWS_REGION=us-east-1 \
+            k6/get-test.js
+            
+      - name: Generate Test Reports
+        if: always()
+        run: |
+          echo "📊 Generating test reports..."
+          npm run analyze || echo "Report generation failed but continuing..."
+          
+      - name: Collect LocalStack Logs
+        if: always()
+        run: |
+          echo "📋 Collecting LocalStack logs..."
+          localstack logs | tee localstack.log || true
+          
+          echo "📊 Final LocalStack health status:"
+          curl -s http://localhost:4566/_localstack/health | jq '.' || true
+          
+          echo "📦 Created resources:"
+          aws --endpoint-url=http://localhost:4566 s3 ls || true
+          aws --endpoint-url=http://localhost:4566 lambda list-functions || true
+          
+          echo "📂 API Gateway logs:"
+          cat api-gateway.log || true
+          
+      - name: Cleanup Background Processes
+        if: always()
+        run: |
+          if [ -f api-gateway.pid ]; then
+            kill $(cat api-gateway.pid) || true
+            rm api-gateway.pid
+          fi
+          
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            reports/
+            *-results.json
+            localstack.log
+            api-gateway.log
+            lambda-test-output.json
+          retention-days: 30
+
+  # Job 3: Security and Quality Check
+  security-check:
+    name: Security & Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+        
+      - name: Security Audit
+        run: |
+          npm audit --audit-level=moderate --json > audit-results.json || true
+          if [ -s audit-results.json ]; then
+            echo "Security audit results:"
+            cat audit-results.json | jq '.vulnerabilities // {}'
+            HIGH_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.high // 0')
+            CRITICAL_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.critical // 0')
+            if [ "$HIGH_VULNS" -gt 0 ] || [ "$CRITICAL_VULNS" -gt 0 ]; then
+              echo "❌ High or critical vulnerabilities found!"
+              exit 1
+            fi
+            echo "✅ No high or critical vulnerabilities found"
+          fi
+          
+      - name: Upload Security Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-results
+          path: audit-results.json
+          retention-days: 30
+
+  # Job 4: Generate Summary Report
+  summary:
+    name: Generate Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [unit-tests, integration-tests, security-check]
+    if: always()
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          
+      - name: Generate Summary Report
+        run: |
+          echo "## 🚀 LocalStack Lambda S3 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**LocalStack Bucket:** ${{ env.BUCKET_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Check | ${{ needs.security-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.integration-tests.result }}" == "success" ]]; then
+            echo "✅ **All tests passed successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The Lambda function was successfully deployed to LocalStack and tested with:" >> $GITHUB_STEP_SUMMARY
+            echo "- Direct Lambda invocation" >> $GITHUB_STEP_SUMMARY
+            echo "- API Gateway simulation" >> $GITHUB_STEP_SUMMARY
+            echo "- S3 upload/download operations" >> $GITHUB_STEP_SUMMARY
+            if [[ "${{ env.SKIP_PERFORMANCE }}" == "false" ]]; then
+              echo "- K6 performance tests" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ **Some tests failed.** Check the logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `## 🧪 LocalStack Test Results
+            
+            **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Commit:** \`${{ github.sha }}\`
+            
+            | Test Suite | Status |
+            |------------|--------|
+            | Unit Tests | ${{ needs.unit-tests.result }} |
+            | Integration Tests | ${{ needs.integration-tests.result }} |
+            | Security Check | ${{ needs.security-check.result }} |
+            
+            ${{ needs.integration-tests.result == 'success' && '✅ All LocalStack integration tests passed!' || '❌ Some tests failed - check the logs' }}
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

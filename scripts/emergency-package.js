@@ -1,59 +1,95 @@
-#!/usr/bin/env node
 /**
  * Emergency Lambda packaging script
- * This is a simpler fallback script for CI environments when the main packaging script fails
+ * Fallback script for when the main packaging fails
  */
-const fs = require('fs');
-const path = require('path');
 const { execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
-// Configuration
-const tempDir = path.join(__dirname, '..', 'lambda-emergency');
+console.log('🚨 Emergency Lambda packaging - Creating minimal deployment package');
+
 const outputZip = path.join(__dirname, '..', 'function.zip');
-const sourceDir = path.join(__dirname, '..', 'lambda');
-
-console.log('🚨 EMERGENCY LAMBDA PACKAGING SCRIPT 🚨');
-console.log('Running simplified packaging as fallback...');
 
 try {
-  // Clean up any existing temporary directory and zip
-  if (fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  // Remove existing zip if it exists
   if (fs.existsSync(outputZip)) {
     fs.unlinkSync(outputZip);
   }
 
-  // Create temp directory
-  fs.mkdirSync(tempDir, { recursive: true });
-  fs.mkdirSync(path.join(tempDir, 'node_modules'), { recursive: true });
+  // Create a very simple package with just the Lambda function
+  console.log('Creating emergency package with basic dependencies...');
   
-  // Copy Lambda source
-  fs.copyFileSync(path.join(sourceDir, 'index.js'), path.join(tempDir, 'index.js'));
+  // Use zip command directly to create package
+  const lambdaDir = path.join(__dirname, '..', 'lambda');
+  const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
   
-  // Install only the critical dependencies directly
-  console.log('Installing critical dependencies directly...');
-  execSync('npm install --no-save @aws-sdk/client-s3 lru-cache', {
-    cwd: tempDir,
-    stdio: 'inherit'
-  });
-  
-  // Create zip
-  console.log('Creating emergency zip package...');
-  execSync(`cd "${tempDir}" && zip -r "${outputZip}" .`, { stdio: 'inherit' });
-  
-  // Basic verification
-  const zipStat = fs.statSync(outputZip);
-  console.log(`Emergency package created: ${zipStat.size} bytes`);
-  
-  if (zipStat.size < 100000) {
-    console.warn('Warning: Package seems small, dependencies may be missing');
-  } else {
-    console.log('Package size looks reasonable');
+  // Check if directories exist
+  if (!fs.existsSync(lambdaDir)) {
+    throw new Error('Lambda directory not found');
   }
   
-  console.log('Emergency packaging completed');
+  // Create zip with lambda files and critical dependencies
+  const zipCommands = [
+    `cd "${path.dirname(outputZip)}"`,
+    `zip -r function.zip lambda/index.js`,
+  ];
+  
+  // Add critical node_modules if they exist
+  const criticalDeps = [
+    '@aws-sdk/client-s3',
+    'lru-cache'
+  ];
+  
+  for (const dep of criticalDeps) {
+    const depPath = path.join(nodeModulesDir, dep);
+    if (fs.existsSync(depPath)) {
+      zipCommands.push(`zip -r function.zip node_modules/${dep}`);
+    } else {
+      console.log(`Warning: ${dep} not found in node_modules`);
+    }
+  }
+  
+  // Execute zip commands
+  const fullCommand = zipCommands.join(' && ');
+  console.log(`Executing: ${fullCommand}`);
+  
+  execSync(fullCommand, { 
+    stdio: 'inherit',
+    cwd: path.dirname(outputZip)
+  });
+  
+  // Verify the package was created
+  if (fs.existsSync(outputZip)) {
+    const stats = fs.statSync(outputZip);
+    console.log(`✅ Emergency package created successfully: ${outputZip} (${stats.size} bytes)`);
+    
+    // List contents
+    try {
+      execSync(`unzip -l "${outputZip}"`, { stdio: 'inherit' });
+    } catch (error) {
+      console.log('Could not list zip contents, but package was created');
+    }
+  } else {
+    throw new Error('Emergency package creation failed - zip file not found');
+  }
+  
 } catch (error) {
-  console.error('Error in emergency packaging:', error);
-  process.exit(1);
+  console.error('❌ Emergency packaging failed:', error.message);
+  
+  // Last resort: create a minimal zip with just the Lambda function
+  try {
+    console.log('🆘 Creating absolute minimal package...');
+    const lambdaFile = path.join(__dirname, '..', 'lambda', 'index.js');
+    
+    if (fs.existsSync(lambdaFile)) {
+      execSync(`cd "${path.dirname(lambdaFile)}" && zip "${outputZip}" index.js`, { stdio: 'inherit' });
+      console.log('✅ Minimal package created with just Lambda function');
+    } else {
+      console.error('❌ Lambda function file not found');
+      process.exit(1);
+    }
+  } catch (finalError) {
+    console.error('❌ Final packaging attempt failed:', finalError.message);
+    process.exit(1);
+  }
 }
