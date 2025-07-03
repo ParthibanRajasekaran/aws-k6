@@ -117,6 +117,7 @@ jobs:
           
       # LocalStack Setup with optimized configuration
       - name: Start LocalStack
+        id: localstack_setup # Assign an ID to this step
         uses: LocalStack/setup-localstack@v0.2.3
         with:
           image-tag: 'latest'
@@ -237,17 +238,21 @@ jobs:
           fi
           
           echo "🚀 Deploying Lambda function..."
-          echo "Verifying required environment variables for Lambda deployment:"
-          echo "LOCALSTACK_HOSTNAME value: [${LOCALSTACK_HOSTNAME}]"
-          echo "EDGE_PORT value: [${EDGE_PORT}]" # EDGE_PORT is usually set by setup-localstack
+          echo "Using step outputs for Lambda environment configuration:"
+          echo "LocalStack Hostname from step output: [${{ steps.localstack_setup.outputs.localstack_hostname }}]"
+          echo "LocalStack Edge Port from step output: [${{ steps.localstack_setup.outputs.edge_port }}]"
 
-          if [ -z "${LOCALSTACK_HOSTNAME}" ]; then
-            echo "::error::LOCALSTACK_HOSTNAME is not set or is empty. Cannot deploy Lambda."
+          # Ensure outputs are not empty (basic check)
+          if [ -z "${{ steps.localstack_setup.outputs.localstack_hostname }}" ]; then
+            echo "::error::LocalStack setup step did not output a hostname."
             exit 1
           fi
-          # EDGE_PORT might be empty if LocalStack defaults are used and it's not explicitly set to something different by setup-localstack,
-          # so we use a default in the lambda env var setting itself. Here, just ensure it's not causing issues if we expect it.
-          # For now, the critical one is LOCALSTACK_HOSTNAME. EDGE_PORT has a default in usage.
+          if [ -z "${{ steps.localstack_setup.outputs.edge_port }}" ]; then
+            echo "::error::LocalStack setup step did not output an edge port."
+            # This might be acceptable if the Lambda code or SDK has a strong default for port 4566
+            # For now, let's not make it fatal but be aware. The ENDPOINT construction below uses a default.
+            # exit 1 # Optionally make this fatal if edge_port is strictly required.
+          fi
 
           aws --endpoint-url=$ENDPOINT lambda create-function \
             --function-name test-lambda \
@@ -257,7 +262,7 @@ jobs:
             --zip-file fileb://function.zip \
             --timeout 30 \
             --memory-size 256 \
-            --environment "Variables={ENDPOINT=http://${LOCALSTACK_HOSTNAME}:${EDGE_PORT:-4566},LOCALSTACK_HOSTNAME=${LOCALSTACK_HOSTNAME},BUCKET_NAME=${BUCKET_NAME}}" \
+            --environment "Variables={ENDPOINT=http://${{ steps.localstack_setup.outputs.localstack_hostname }}:${{ steps.localstack_setup.outputs.edge_port || '4566' }},LOCALSTACK_HOSTNAME=${{ steps.localstack_setup.outputs.localstack_hostname }},BUCKET_NAME=${BUCKET_NAME}}" \
             || echo "Lambda may already exist"
           
           # Wait for Lambda to become active
