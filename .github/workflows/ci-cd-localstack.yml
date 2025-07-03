@@ -113,7 +113,7 @@ jobs:
       - name: Setup K6
         uses: grafana/setup-k6-action@v1
         with:
-          k6-version: latest
+          k6-version: v0.50.0 # Pin to a specific version instead of 'latest'
           
       # LocalStack Setup with optimized configuration
       - name: Start LocalStack
