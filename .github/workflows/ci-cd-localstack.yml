@@ -47,9 +47,10 @@ concurrency:
 
 # Security - minimal permissions
 permissions:
-  contents: read
+  contents: write # Allow write to commit and push changes
   checks: write
   pull-requests: write
+  actions: read # Allow reading workflow run status
 
 jobs:
   # Job 1: Unit Tests
@@ -435,8 +436,9 @@ jobs:
     name: Generate Summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [unit-tests, integration-tests, security-check]
-    if: always()
+    # Depends on all preceding jobs, including the validation of the pushed workflow
+    needs: [unit-tests, integration-tests, security-check, commit-and-push, validate-pushed-workflow]
+    if: always() # Always run to provide a summary, regardless of upstream failures
     
     steps:
       - name: Checkout Code
@@ -464,9 +466,22 @@ jobs:
           echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Security Check | ${{ needs.security-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          # Add new job statuses, handle cases where they might be skipped
+          echo "| Commit & Push | ${{ needs.commit-and-push.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Validate Pushed Workflow | ${{ needs.validate-pushed-workflow.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ needs.integration-tests.result }}" == "success" ]]; then
+          # Overall success check should now include the validation job if it ran
+          _ALL_JOBS_SUCCESS="true"
+          if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then _ALL_JOBS_SUCCESS="false"; fi
+          if [[ "${{ needs.integration-tests.result }}" != "success" ]]; then _ALL_JOBS_SUCCESS="false"; fi
+          if [[ "${{ needs.security-check.result }}" != "success" ]]; then _ALL_JOBS_SUCCESS="false"; fi
+          # Only check commit-and-push if it was expected to run (i.e., not skipped)
+          if [[ "${{ needs.commit-and-push.result }}" != "skipped" && "${{ needs.commit-and-push.result }}" != "success" ]]; then _ALL_JOBS_SUCCESS="false"; fi
+          # Only check validate-pushed-workflow if it was expected to run
+          if [[ "${{ needs.validate-pushed-workflow.result }}" != "skipped" && "${{ needs.validate-pushed-workflow.result }}" != "success" ]]; then _ALL_JOBS_SUCCESS="false"; fi
+
+          if [[ "$_ALL_JOBS_SUCCESS" == "true" ]]; then
             echo "✅ **All tests passed successfully!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "The Lambda function was successfully deployed to LocalStack and tested with:" >> $GITHUB_STEP_SUMMARY
@@ -495,8 +510,18 @@ jobs:
             | Unit Tests | ${{ needs.unit-tests.result }} |
             | Integration Tests | ${{ needs.integration-tests.result }} |
             | Security Check | ${{ needs.security-check.result }} |
+            | Commit & Push | ${{ needs.commit-and-push.result || 'skipped' }} |
+            | Validate Pushed Workflow | ${{ needs.validate-pushed-workflow.result || 'skipped' }} |
             
-            ${{ needs.integration-tests.result == 'success' && '✅ All LocalStack integration tests passed!' || '❌ Some tests failed - check the logs' }}
+            ${ /* Check overall success, considering that commit/validate jobs might be skipped on PRs */ '' }
+            ${
+              (needs['unit-tests'].result === 'success' &&
+               needs['integration-tests'].result === 'success' &&
+               needs['security-check'].result === 'success' &&
+               (needs['commit-and-push'].result === 'success' || needs['commit-and-push'].result === 'skipped') &&
+               (needs['validate-pushed-workflow'].result === 'success' || needs['validate-pushed-workflow'].result === 'skipped')
+              ) ? '✅ All checks passed!' : '❌ Some checks failed - review logs.'
+            }
             `;
             
             github.rest.issues.createComment({
@@ -505,3 +530,160 @@ jobs:
               repo: context.repo.repo,
               body: comment
             });
+
+  # Job 5: Commit and Push Changes
+  commit-and-push:
+    name: Commit and Push Changes
+    runs-on: ubuntu-latest
+    needs: [integration-tests, security-check] # Depends on successful completion of tests
+    if: success() && github.event_name == 'push' # Only run on push events and if previous jobs succeeded
+    outputs:
+      committed_sha: ${{ steps.commit_push.outputs.commit_sha }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history to allow proper commit and push
+          fetch-depth: 0
+          # Use a token with write permissions
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies (if needed for report generation or lockfile updates)
+        run: npm ci --prefer-offline
+
+      # Example: If reports are generated and should be committed
+      - name: Download Test Artifacts (if reports are to be committed)
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }} # Ensure this matches the upload name
+          path: artifacts/test-results # Download to a specific path
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Commit and Push
+        id: commit_push
+        run: |
+          # Add any specific files that might have changed or new reports
+          # For example, if package-lock.json changed:
+          git add package-lock.json
+          # Add reports if they were downloaded and should be committed
+          git add artifacts/test-results/* || echo "No new reports to add"
+          git add reports/* || echo "No new reports to add"
+
+          # Check for changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            # Output the current SHA if no new commit is made
+            echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          else
+            git commit -m "CI: Auto-commit updates from workflow run ${{ github.run_id }}"
+            # Retry push with delay
+            for i in {1..3}; do
+              git push origin HEAD:${{ github.ref_name }} && break
+              echo "Push attempt $i failed. Retrying in 10 seconds..."
+              sleep 10
+            done
+            if ! git push origin HEAD:${{ github.ref_name }}; then
+              echo "::error::Failed to push changes after multiple retries."
+              exit 1
+            fi
+            echo "Pushed changes successfully."
+            echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job 6: Validate Pushed Workflow Run
+  validate-pushed-workflow:
+    name: Validate Pushed Workflow Run
+    runs-on: ubuntu-latest
+    needs: commit-and-push
+    # Only run if a new commit was successfully pushed by the commit-and-push job.
+    # This is determined by comparing the SHA output by commit-and-push
+    # with the SHA that triggered this current workflow run.
+    if: success() && github.event_name == 'push' && needs.commit-and-push.outputs.committed_sha != github.sha
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate Workflow Run Status
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pushedSha = "${{ needs.commit-and-push.outputs.committed_sha }}";
+            const currentRunId = ${{ github.run_id }};
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = "${{ github.ref_name }}";
+
+            console.log(`Pushed SHA: ${pushedSha}`);
+            console.log(`Current Run ID: ${currentRunId}`);
+            console.log(`Branch: ${branch}`);
+
+            if (!pushedSha) {
+              console.log("No new commit SHA provided by the previous job. Skipping validation.");
+              return;
+            }
+
+            // Wait for a few seconds to allow the new workflow run to be initiated
+            await new Promise(resolve => setTimeout(resolve, 15000)); // 15 seconds delay
+
+            let attempts = 0;
+            const maxAttempts = 20; // Poll for up to 20 * 30s = 10 minutes
+
+            while (attempts < maxAttempts) {
+              attempts++;
+              console.log(`Attempt ${attempts}/${maxAttempts} to fetch workflow runs...`);
+
+              const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner,
+                repo,
+                branch,
+                event: 'push', // Only consider push events
+                per_page: 10, // Check recent runs
+              });
+
+              console.log(`Found ${runs.workflow_runs.length} runs on branch '${branch}'.`);
+
+              // Find the workflow run that corresponds to the pushed commit
+              // and is NOT the current workflow run.
+              const targetRun = runs.workflow_runs.find(run => {
+                console.log(`Checking run ID ${run.id} with SHA ${run.head_sha}`);
+                return run.head_sha === pushedSha && run.id !== currentRunId;
+              });
+
+              if (targetRun) {
+                console.log(`Found target workflow run: ID ${targetRun.id}, Status ${targetRun.status}, Conclusion ${targetRun.conclusion}`);
+
+                if (targetRun.status === 'completed') {
+                  if (targetRun.conclusion === 'success') {
+                    console.log(`✅ Workflow run ${targetRun.id} for commit ${pushedSha} completed successfully.`);
+                    return;
+                  } else {
+                    core.setFailed(`❌ Workflow run ${targetRun.id} for commit ${pushedSha} completed with conclusion: ${targetRun.conclusion}. URL: ${targetRun.html_url}`);
+                    return;
+                  }
+                } else {
+                  console.log(`Workflow run ${targetRun.id} is still in progress (Status: ${targetRun.status}). Waiting...`);
+                }
+              } else {
+                console.log(`No matching workflow run found yet for SHA ${pushedSha} (that is not this run). Will retry.`);
+              }
+
+              if (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds before next poll
+              }
+            }
+            core.setFailed(`❌ Timed out waiting for workflow run for commit ${pushedSha} to complete.`);
