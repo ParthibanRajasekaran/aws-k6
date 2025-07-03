@@ -237,6 +237,18 @@ jobs:
           fi
           
           echo "🚀 Deploying Lambda function..."
+          echo "Verifying required environment variables for Lambda deployment:"
+          echo "LOCALSTACK_HOSTNAME value: [${LOCALSTACK_HOSTNAME}]"
+          echo "EDGE_PORT value: [${EDGE_PORT}]" # EDGE_PORT is usually set by setup-localstack
+
+          if [ -z "${LOCALSTACK_HOSTNAME}" ]; then
+            echo "::error::LOCALSTACK_HOSTNAME is not set or is empty. Cannot deploy Lambda."
+            exit 1
+          fi
+          # EDGE_PORT might be empty if LocalStack defaults are used and it's not explicitly set to something different by setup-localstack,
+          # so we use a default in the lambda env var setting itself. Here, just ensure it's not causing issues if we expect it.
+          # For now, the critical one is LOCALSTACK_HOSTNAME. EDGE_PORT has a default in usage.
+
           aws --endpoint-url=$ENDPOINT lambda create-function \
             --function-name test-lambda \
             --runtime nodejs20.x \
