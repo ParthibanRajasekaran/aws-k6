@@ -118,7 +118,7 @@ jobs:
       # LocalStack Setup with optimized configuration
       - name: Start LocalStack
         id: localstack_setup # Assign an ID to this step
-        uses: LocalStack/setup-localstack@v0.2.3 # Revert to previously resolvable version
+        uses: LocalStack/setup-localstack@v0 # Use major version tag
         with:
           image-tag: 'latest'
           install-awslocal: 'true'
