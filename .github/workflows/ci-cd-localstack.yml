@@ -118,7 +118,7 @@ jobs:
       # LocalStack Setup with optimized configuration
       - name: Start LocalStack
         id: localstack_setup # Assign an ID to this step
-        uses: LocalStack/setup-localstack@v0 # Use major version tag
+        uses: LocalStack/setup-localstack@v0.2.3 # Revert to previously resolvable version
         with:
           image-tag: 'latest'
           install-awslocal: 'true'
@@ -534,16 +534,44 @@ jobs:
             | Security Check | ${{ needs.security-check.result }} |
             | Commit & Push | ${{ needs.commit-and-push.result || 'skipped' }} |
             | Validate Pushed Workflow | ${{ needs.validate-pushed-workflow.result || 'skipped' }} |
-            
-            ${ /* Check overall success, considering that commit/validate jobs might be skipped on PRs */ '' }
-            ${
-              (needs['unit-tests'].result === 'success' &&
-               needs['integration-tests'].result === 'success' &&
-               needs['security-check'].result === 'success' &&
-               (needs['commit-and-push'].result === 'success' || needs['commit-and-push'].result === 'skipped') &&
-               (needs['validate-pushed-workflow'].result === 'success' || needs['validate-pushed-workflow'].result === 'skipped')
-              ) ? '✅ All checks passed!' : '❌ Some checks failed - review logs.'
+
+            ${ /* This part will be handled by JS logic below */ '' }
+            const unitTestsResult = "${{ needs.unit-tests.result }}";
+            const integrationTestsResult = "${{ needs.integration-tests.result }}";
+            const securityCheckResult = "${{ needs.security-check.result }}";
+            const commitPushResult = "${{ needs.commit-and-push.result || 'skipped' }}";
+            const validateWorkflowResult = "${{ needs.validate-pushed-workflow.result || 'skipped' }}";
+
+            let allChecksPassed = unitTestsResult === 'success' &&
+                                  integrationTestsResult === 'success' &&
+                                  securityCheckResult === 'success';
+
+            if (commitPushResult !== 'skipped') {
+              allChecksPassed = allChecksPassed && commitPushResult === 'success';
             }
+            if (validateWorkflowResult !== 'skipped') {
+              allChecksPassed = allChecksPassed && validateWorkflowResult === 'success';
+            }
+
+            const overallStatusMessage = allChecksPassed ? '✅ All checks passed!' : '❌ Some checks failed - review logs.';
+
+            // Reconstruct the table part of the comment body using the JS variables for consistency
+            const commentBodyTable = `| Test Suite               | Status                        |
+            |--------------------------|-------------------------------|
+            | Unit Tests               | ${unitTestsResult}            |
+            | Integration Tests        | ${integrationTestsResult}     |
+            | Security Check           | ${securityCheckResult}        |
+            | Commit & Push            | ${commitPushResult}           |
+            | Validate Pushed Workflow | ${validateWorkflowResult}    |`;
+
+            const comment = `## 🧪 LocalStack Test Results
+
+            **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Commit:** \`${{ github.sha }}\`
+
+            ${commentBodyTable}
+
+            ${overallStatusMessage}
             `;
             
             github.rest.issues.createComment({
