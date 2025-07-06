@@ -248,7 +248,7 @@ jobs:
             --zip-file fileb://function.zip \
             --timeout 30 \
             --memory-size 256 \
-            --environment "Variables={ENDPOINT=http://localhost:4566,LOCALSTACK_HOSTNAME=localhost,BUCKET_NAME=${BUCKET_NAME}}" \
+            --environment "Variables={BUCKET_NAME=${BUCKET_NAME}}" \
             || echo "Lambda may already exist"
           
           # Wait for Lambda to become active
