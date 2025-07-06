@@ -137,7 +137,7 @@ jobs:
             LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
             SYNCHRONOUS_KINESIS_EVENTS=1
             SYNCHRONOUS_SNS_EVENTS=1
-            LAMBDA_DOCKER_NETWORK=host
+            # LAMBDA_DOCKER_NETWORK=host # Removed to try default bridge networking
             # LAMBDA_DOCKER_FLAGS="-e LOCALSTACK_HOST=localhost -e ENDPOINT=http://localhost:4566" # Removed to allow Lambda to use its own LOCALSTACK_HOSTNAME
             
       - name: Wait for LocalStack Services
