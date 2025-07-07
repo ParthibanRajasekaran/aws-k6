@@ -129,8 +129,8 @@ jobs:
             LAMBDA_EXECUTOR=docker
             LAMBDA_REMOVE_CONTAINERS=0
             EAGER_SERVICE_LOADING=1
-            HOSTNAME_EXTERNAL=localhost
-            LOCALSTACK_HOST=localhost
+            # HOSTNAME_EXTERNAL=localhost # Let LocalStack determine default
+            # LOCALSTACK_HOST=localhost # Let LocalStack determine default
             DOCKER_HOST=unix:///var/run/docker.sock
             LAMBDA_REMOTE_DOCKER=0
             LAMBDA_INIT_DELAYER=0
