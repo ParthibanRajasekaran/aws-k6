@@ -1,0 +1,28 @@
+{
+  "name": "aws-k6-grocery-microservice",
+  "version": "1.0.0",
+  "description": "Microservice for storing grocery lists in S3 via Lambda/API Gateway, with local testing via LocalStack.",
+  "main": "src/lambda/groceryHandler.js",
+  "scripts": {
+    "test:unit": "vitest run",
+    "test:acceptance": "java -jar karate.jar -d target test/acceptance",
+    "test:lambda:direct": "node test/direct-lambda-invoke.js",
+    "lint": "eslint . --ext .js,.ts,.json --ignore-path .gitignore",
+    "format": "prettier --write .",
+    "test:performance:api": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-api-gateway.js",
+    "test:performance:lambda": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-lambda.js",
+    "test:performance": "npm run test:performance:api && npm run test:performance:lambda",
+    "start": "localstack start -d && aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true && sam local start-api --env-vars env.json",
+    "deploy": "sam deploy --guided",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1481.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "husky": "^9.1.7",
+    "vitest": "^3.2.4"
+  }
+}
