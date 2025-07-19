@@ -32,5 +32,25 @@ jobs:
       - name: Download Karate JAR
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
+      - name: Start API Gateway simulation (SAM/LocalStack)
+        run: npm run start &
+      - name: List running processes (debug)
+        run: |
+          echo "\n--- Running processes after starting API Gateway simulation ---"
+          ps aux
+          echo "--- End of process list ---\n"
       - name: Run all tests (unit, direct lambda, acceptance, performance)
         run: ./scripts/test-all.sh
+      - name: Print API Gateway simulation logs if health check fails
+        if: failure()
+        run: |
+          echo "\n--- Last 50 lines of API Gateway simulation log (npm run start) ---"
+          # Try to find the most recent log file or process output
+          # If using sam local, print .aws-sam/logs or docker logs
+          # If using npm run start > file.log, print that file
+          # Otherwise, print all node processes
+          pgrep -af node || true
+          # Try to print docker logs for localstack if relevant
+          docker ps -a || true
+          docker logs $(docker ps -q --filter ancestor=localstack/localstack:latest) 2>/dev/null || true
+          echo "--- End of log output ---\n"
