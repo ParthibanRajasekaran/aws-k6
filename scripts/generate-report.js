@@ -359,6 +359,34 @@ function generateDetailedReport(metrics, testName, outputPath) {
             </div>
         </div>
 
+        <!-- HTTP Request Duration and Rate Time Series Charts -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">HTTP Request Duration Over Time</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="httpReqDurationChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">HTTP Request Rate Over Time</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="httpReqRateChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Detailed Metrics -->
         <div class="row">
             <div class="col-md-6">
@@ -1035,3 +1063,8 @@ function getResponseTimeImpact(metrics) {
     if (p95 <= 1000) return '<span class="text-warning">Fair</span>';
     return '<span class="text-danger">Poor</span>';
 }
+
+module.exports = {
+  generateDetailedReport,
+  // Export other helpers if needed
+};

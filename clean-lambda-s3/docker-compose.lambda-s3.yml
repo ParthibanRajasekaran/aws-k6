@@ -1,0 +1,66 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=lambda,s3,iam
+      - DEFAULT_REGION=us-east-1
+      - DEBUG=1
+      - LS_LOG=warn
+      - LAMBDA_EXECUTOR=local
+      - PERSISTENCE=false
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack-s3-data:/var/lib/localstack"
+    networks:
+      - lambda_s3_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - LOCALSTACK_HOST=localstack
+      - BUCKET=test-bucket
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./:/app
+    depends_on:
+      - localstack
+    networks:
+      - lambda_s3_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  k6-lambda-s3:
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+      - ./reports:/reports
+    environment:
+      - K6_OUT=json=/reports/lambda-s3/results.json
+      - API_URL=http://api-gateway:3000
+    depends_on:
+      - api-gateway
+    networks:
+      - lambda_s3_net
+    command: ["run", "--summary-export=/reports/lambda-s3/summary.json", "/scripts/post-test.js"]
+
+networks:
+  lambda_s3_net:
+    name: lambda_s3_net
