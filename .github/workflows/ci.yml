@@ -73,11 +73,22 @@ jobs:
               "AWS_ACCESS_KEY_ID": "test",
               "AWS_SECRET_ACCESS_KEY": "test",
               "AWS_REGION": "us-east-1",
-              "AWS_ENDPOINT_URL": "http://localhost:4566"
+              "AWS_ENDPOINT_URL": "http://localhost:4566",
+              "AWS_DEFAULT_REGION": "us-east-1"
             }
           }
           EOF
           cat env.json
+          
+          # Also create a local .env file for debugging
+          cat > .env << EOF
+          GROCERY_BUCKET=grocery-list-bucket
+          AWS_ACCESS_KEY_ID=test
+          AWS_SECRET_ACCESS_KEY=test
+          AWS_REGION=us-east-1
+          AWS_ENDPOINT_URL=http://localhost:4566
+          AWS_DEFAULT_REGION=us-east-1
+          EOF
       
       - name: Build SAM application
         run: |
@@ -88,14 +99,22 @@ jobs:
       - name: Start API Gateway simulation and run tests
         run: |
           echo "Starting API Gateway simulation in background..."
+          # Export environment variables to ensure they're available to sam local
+          export GROCERY_BUCKET=grocery-list-bucket
+          export AWS_ACCESS_KEY_ID=test
+          export AWS_SECRET_ACCESS_KEY=test
+          export AWS_REGION=us-east-1
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          export AWS_DEFAULT_REGION=us-east-1
+          
           # Start the API Gateway simulation in background without using & to prevent job termination
           # npm run start:ci will use SAM CLI to start the API gateway locally
           npm run start:ci &
           SAM_PID=$!
           echo "SAM process started with PID: $SAM_PID"
           # Give the server time to start and check if process is still running
-          echo "Sleeping for 15 seconds to allow API simulation to start..."
-          sleep 15
+          echo "Sleeping for 20 seconds to allow API simulation to start..."
+          sleep 20
           if ps -p $SAM_PID > /dev/null; then
             echo "SAM process is still running (PID: $SAM_PID)"
           else
@@ -104,6 +123,13 @@ jobs:
             docker ps -a
             exit 1
           fi
+          
+          # Test the health endpoint first
+          echo "Testing health endpoint..."
+          curl -f http://localhost:3000/grocery -X GET || {
+            echo "Health endpoint failed!"
+            exit 1
+          }
           
           # Verify LocalStack is still healthy
           curl -s http://localhost:4566/_localstack/health || {
@@ -119,6 +145,7 @@ jobs:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
           GROCERY_BUCKET: grocery-list-bucket
       - name: Print API Gateway simulation logs if health check fails
         if: failure()

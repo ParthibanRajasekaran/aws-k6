@@ -7,6 +7,14 @@
 
 function makeHandler(groceryService = require('../services/groceryService')) {
   return async (event) => {
+    console.log('Lambda Environment Variables:');
+    console.log('AWS_REGION:', process.env.AWS_REGION);
+    console.log('AWS_DEFAULT_REGION:', process.env.AWS_DEFAULT_REGION);
+    console.log('AWS_ENDPOINT_URL:', process.env.AWS_ENDPOINT_URL);
+    console.log('AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY_ID ? '[SET]' : '[NOT SET]');
+    console.log('AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_ACCESS_KEY ? '[SET]' : '[NOT SET]');
+    console.log('GROCERY_BUCKET:', process.env.GROCERY_BUCKET);
+
     // Health check: respond to GET /grocery
     if (event.httpMethod === 'GET') {
       return {
@@ -33,7 +41,7 @@ function makeHandler(groceryService = require('../services/groceryService')) {
       const s3Key = await groceryService.storeGroceryList(items);
       return {
         statusCode: 200,
-        body: JSON.stringify({ message: 'Grocery list stored', s3Key })
+        body: JSON.stringify({ message: 'Grocery list stored successfully', s3Key })
       };
     } catch (err) {
       console.log('Handler caught error:', err);

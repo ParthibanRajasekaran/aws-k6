@@ -14,7 +14,7 @@ describe('groceryHandler', () => {
     const res = await handler(event);
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.message).toBe('Grocery list stored');
+    expect(body.message).toBe('Grocery list stored successfully');
     expect(body.s3Key).toMatch(/^grocery-list-.*\.json$/);
   });
 
@@ -25,7 +25,7 @@ describe('groceryHandler', () => {
     const res = await handler(event);
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.message).toBe('Grocery list stored');
+    expect(body.message).toBe('Grocery list stored successfully');
     expect(body.s3Key).toMatch(/^grocery-list-.*\.json$/);
   });
 
