@@ -24,6 +24,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      
+      - name: Configure AWS credentials for LocalStack
+        run: |
+          aws configure set aws_access_key_id test
+          aws configure set aws_secret_access_key test  
+          aws configure set region us-east-1
+          aws configure set output json
       - name: Install dependencies
         run: |
           for i in 1 2 3; do
@@ -37,7 +44,20 @@ jobs:
           done
       - name: Start LocalStack and create S3 bucket
         run: |
+          echo "Waiting for LocalStack to be ready..."
+          # Wait for LocalStack to be fully ready
+          for i in {1..30}; do
+            if curl -s http://localhost:4566/_localstack/health | grep -q '"s3": "available"'; then
+              echo "LocalStack is ready!"
+              break
+            fi
+            echo "Waiting for LocalStack... (attempt $i/30)"
+            sleep 2
+          done
+          # Create S3 bucket
           aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true
+          # Verify bucket was created
+          aws --endpoint-url=http://localhost:4566 s3 ls
       - name: Download Karate JAR
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
@@ -84,10 +104,22 @@ jobs:
             docker ps -a
             exit 1
           fi
+          
+          # Verify LocalStack is still healthy
+          curl -s http://localhost:4566/_localstack/health || {
+            echo "LocalStack health check failed!"
+            docker logs $(docker ps -q --filter ancestor=localstack/localstack:latest) 2>/dev/null || true
+            exit 1
+          }
+          
           # Execute full test suite; test-all.sh includes a wait-for-url step
           ./scripts/test-all.sh
         env:
           AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
+          GROCERY_BUCKET: grocery-list-bucket
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
         run: |

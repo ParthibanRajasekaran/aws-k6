@@ -13,12 +13,9 @@ const s3Client = new S3Client({
   } : undefined
 });
 
-module.exports = s3Client;
-
 /**
  * Put object to S3
  */
-
 async function putObjectToS3(bucket, key, body) {
   const command = new PutObjectCommand({
     Bucket: bucket,
