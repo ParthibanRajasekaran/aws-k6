@@ -42,7 +42,12 @@ jobs:
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
       - name: Start API Gateway simulation (SAM/LocalStack)
-        run: npm run start:ci &
+        run: |
+          npm run start:ci > sam-local.log 2>&1 &
+          sleep 5
+          echo "--- sam-local.log initial output ---"
+          head -40 sam-local.log || true
+          echo "--- end sam-local.log initial output ---"
       - name: List running processes (debug)
         run: |
           echo "\n--- Running processes after starting API Gateway simulation ---"
