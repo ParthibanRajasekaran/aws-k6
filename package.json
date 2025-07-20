@@ -4,6 +4,7 @@
   "description": "Microservice for storing grocery lists in S3 via Lambda/API Gateway, with local testing via LocalStack.",
   "main": "src/lambda/groceryHandler.js",
   "scripts": {
+    "test": "npm run test:unit",
     "test:unit": "vitest run",
     "test:acceptance": "java -jar karate.jar -d target test/acceptance",
     "test:lambda:direct": "node test/direct-lambda-invoke.js",
