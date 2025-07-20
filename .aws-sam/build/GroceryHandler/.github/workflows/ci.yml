@@ -25,22 +25,69 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm ci
+        run: |
+          for i in 1 2 3; do
+            npm ci && break || {
+              echo "npm ci failed (attempt $i), printing npm-debug.log if exists...";
+              if [ -f npm-debug.log ]; then cat npm-debug.log; fi;
+              if [ $i -eq 3 ]; then exit 1; fi;
+              echo "Retrying in 10 seconds...";
+              sleep 10;
+            }
+          done
       - name: Start LocalStack and create S3 bucket
         run: |
           aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true
       - name: Download Karate JAR
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
-      - name: Start API Gateway simulation (SAM/LocalStack)
-        run: npm run start:ci &
-      - name: List running processes (debug)
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v1
+      - name: Create CI-specific environment file
         run: |
-          echo "\n--- Running processes after starting API Gateway simulation ---"
-          ps aux
-          echo "--- End of process list ---\n"
-      - name: Run all tests (unit, direct lambda, acceptance, performance)
-        run: ./scripts/test-all.sh
+          echo "Creating environment file for CI with correct LocalStack endpoint..."
+          cat > env.json << EOF
+          {
+            "GroceryHandler": {
+              "GROCERY_BUCKET": "grocery-list-bucket",
+              "AWS_ACCESS_KEY_ID": "test",
+              "AWS_SECRET_ACCESS_KEY": "test",
+              "AWS_REGION": "us-east-1",
+              "AWS_ENDPOINT_URL": "http://localhost:4566"
+            }
+          }
+          EOF
+          cat env.json
+      
+      - name: Build SAM application
+        run: |
+          echo "Building SAM application..."
+          sam build --debug
+          echo "SAM build completed"
+      
+      - name: Start API Gateway simulation and run tests
+        run: |
+          echo "Starting API Gateway simulation in background..."
+          # Start the API Gateway simulation in background without using & to prevent job termination
+          # npm run start:ci will use SAM CLI to start the API gateway locally
+          npm run start:ci &
+          SAM_PID=$!
+          echo "SAM process started with PID: $SAM_PID"
+          # Give the server time to start and check if process is still running
+          echo "Sleeping for 15 seconds to allow API simulation to start..."
+          sleep 15
+          if ps -p $SAM_PID > /dev/null; then
+            echo "SAM process is still running (PID: $SAM_PID)"
+          else
+            echo "SAM process died! Checking for errors..."
+            # Try to see if there are any docker containers
+            docker ps -a
+            exit 1
+          fi
+          # Execute full test suite; test-all.sh includes a wait-for-url step
+          ./scripts/test-all.sh
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
         run: |

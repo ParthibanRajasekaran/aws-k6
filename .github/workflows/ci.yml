@@ -59,6 +59,12 @@ jobs:
           EOF
           cat env.json
       
+      - name: Build SAM application
+        run: |
+          echo "Building SAM application..."
+          sam build --debug
+          echo "SAM build completed"
+      
       - name: Start API Gateway simulation and run tests
         run: |
           echo "Starting API Gateway simulation in background..."
@@ -68,8 +74,8 @@ jobs:
           SAM_PID=$!
           echo "SAM process started with PID: $SAM_PID"
           # Give the server time to start and check if process is still running
-          echo "Sleeping for 10 seconds to allow API simulation to start..."
-          sleep 10
+          echo "Sleeping for 15 seconds to allow API simulation to start..."
+          sleep 15
           if ps -p $SAM_PID > /dev/null; then
             echo "SAM process is still running (PID: $SAM_PID)"
           else

@@ -4,7 +4,7 @@ Description: Grocery List Microservice
 Globals:
   Function:
     Timeout: 10
-    Runtime: nodejs18.x
+    Runtime: nodejs20.x
 Resources:
   GroceryHandler:
     Type: AWS::Serverless::Function
