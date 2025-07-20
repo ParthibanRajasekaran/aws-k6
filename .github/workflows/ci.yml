@@ -13,12 +13,6 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || 'test' }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || 'test' }}
       AWS_REGION: us-east-1
-    services:
-      localstack:
-        image: localstack/localstack:latest
-        ports:
-          - 4566:4566
-        options: --name localstack --health-cmd="curl -f http://localhost:4566/_localstack/health" --health-interval=10s --health-timeout=5s --health-retries=3
     steps:
       - uses: actions/checkout@v4
       - name: Set up Node.js
@@ -32,6 +26,15 @@ jobs:
           aws configure set aws_secret_access_key test  
           aws configure set region us-east-1
           aws configure set output json
+      
+      - name: Start LocalStack
+        uses: LocalStack/setup-localstack@v0.2.2
+        with:
+          image-tag: 'latest'
+          install-awslocal: 'true'
+        env:
+          DEBUG: 1
+          
       - name: Install dependencies
         run: |
           for i in 1 2 3; do
@@ -43,7 +46,8 @@ jobs:
               sleep 10;
             }
           done
-      - name: Start LocalStack and create S3 bucket
+          
+      - name: Create S3 bucket in LocalStack
         run: |
           echo "Waiting for LocalStack to be ready..."
           # Wait for LocalStack to be fully ready
@@ -56,14 +60,18 @@ jobs:
             sleep 2
           done
           # Create S3 bucket
-          aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true
+          awslocal s3 mb s3://grocery-list-bucket || true
           # Verify bucket was created
-          aws --endpoint-url=http://localhost:4566 s3 ls
+          awslocal s3 ls
       - name: Download Karate JAR
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
-      - name: Setup AWS SAM CLI
+      - name: Setup AWS SAM CLI and samlocal
         uses: aws-actions/setup-sam@v1
+      
+      - name: Install samlocal wrapper
+        run: |
+          pip install aws-sam-cli-local
       - name: Create CI-specific environment file
         run: |
           echo "Creating environment file for CI with correct LocalStack endpoint..."
@@ -93,26 +101,22 @@ jobs:
       
       - name: Build SAM application
         run: |
-          echo "Building SAM application..."
-          sam build --debug
+          echo "Building SAM application with samlocal..."
+          samlocal build --debug
           echo "SAM build completed"
       
       - name: Start API Gateway simulation and run tests
         run: |
-          echo "Starting API Gateway simulation in background..."
-          # Export environment variables to ensure they're available to sam local
+          echo "Starting API Gateway simulation with samlocal..."
+          
+          # Export environment variables to ensure they're available
           export GROCERY_BUCKET=grocery-list-bucket
           export AWS_ACCESS_KEY_ID=test
           export AWS_SECRET_ACCESS_KEY=test
           export AWS_REGION=us-east-1
-          export AWS_ENDPOINT_URL=http://localhost:4566
           export AWS_DEFAULT_REGION=us-east-1
           
-          # Verify LocalStack container is reachable from Lambda network
-          docker network ls
-          docker ps
-          
-          # Update the environment file with localhost endpoint for host networking
+          # Create environment file for samlocal
           cat > env.json << EOF
           {
             "GroceryHandler": {
@@ -120,48 +124,51 @@ jobs:
               "AWS_ACCESS_KEY_ID": "test",
               "AWS_SECRET_ACCESS_KEY": "test",
               "AWS_REGION": "us-east-1",
-              "AWS_ENDPOINT_URL": "http://localhost:4566",
               "AWS_DEFAULT_REGION": "us-east-1"
             }
           }
           EOF
+          echo "Environment file contents:"
           cat env.json
           
-          # Start the API Gateway simulation in background without using & to prevent job termination
-          # npm run start:ci will use SAM CLI to start the API gateway locally
-          npm run start:ci &
+          # Start the API Gateway simulation using samlocal (which handles LocalStack networking automatically)
+          samlocal local start-api --env-vars env.json --port 3000 --host 0.0.0.0 --skip-pull-image &
           SAM_PID=$!
-          echo "SAM process started with PID: $SAM_PID"
+          echo "samlocal process started with PID: $SAM_PID"
+          
           # Give the server time to start and check if process is still running
-          echo "Sleeping for 20 seconds to allow API simulation to start..."
-          sleep 20
+          echo "Sleeping for 25 seconds to allow API simulation to start..."
+          sleep 25
           if ps -p $SAM_PID > /dev/null; then
-            echo "SAM process is still running (PID: $SAM_PID)"
+            echo "samlocal process is still running (PID: $SAM_PID)"
           else
-            echo "SAM process died! Checking for errors..."
-            # Try to see if there are any docker containers
+            echo "samlocal process died! Checking for errors..."
             docker ps -a
             exit 1
           fi
           
           # Test the health endpoint first
           echo "Testing health endpoint..."
-          curl -f http://localhost:3000/grocery -X GET || {
-            echo "Health endpoint failed!"
-            exit 1
-          }
+          for i in {1..10}; do
+            if curl -f http://localhost:3000/grocery -X GET 2>/dev/null; then
+              echo "Health endpoint is responding!"
+              break
+            fi
+            echo "Waiting for health endpoint... (attempt $i/10)"
+            sleep 3
+          done
           
           # Verify LocalStack is still healthy
           curl -s http://localhost:4566/_localstack/health || {
             echo "LocalStack health check failed!"
-            docker logs $(docker ps -q --filter ancestor=localstack/localstack:latest) 2>/dev/null || true
+            echo "LocalStack logs:"
+            docker logs localstack 2>/dev/null || true
             exit 1
           }
           
           # Execute full test suite; test-all.sh includes a wait-for-url step
           ./scripts/test-all.sh
         env:
-          AWS_ENDPOINT_URL: http://localhost:4566
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
@@ -170,13 +177,13 @@ jobs:
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
         run: |
-          echo "\n--- Last 50 lines of API Gateway simulation log (npm run start) ---"
+          echo "\n--- Last 50 lines of API Gateway simulation log (samlocal) ---"
           # Try to find the most recent log file or process output
-          # If using sam local, print .aws-sam/logs or docker logs
-          # If using npm run start > file.log, print that file
-          # Otherwise, print all node processes
-          pgrep -af node || true
-          # Try to print docker logs for localstack if relevant
+          # If using samlocal, print any relevant process information
+          pgrep -af sam || true
+          pgrep -af python || true
+          # Try to print docker logs for LocalStack
           docker ps -a || true
-          docker logs $(docker ps -q --filter ancestor=localstack/localstack:latest) 2>/dev/null || true
+          echo "LocalStack logs:"
+          docker logs localstack 2>/dev/null || true
           echo "--- End of log output ---\n"
