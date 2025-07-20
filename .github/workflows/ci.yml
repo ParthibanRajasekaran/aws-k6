@@ -25,7 +25,16 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm ci
+        run: |
+          for i in 1 2 3; do
+            npm ci && break || {
+              echo "npm ci failed (attempt $i), printing npm-debug.log if exists...";
+              if [ -f npm-debug.log ]; then cat npm-debug.log; fi;
+              if [ $i -eq 3 ]; then exit 1; fi;
+              echo "Retrying in 10 seconds...";
+              sleep 10;
+            }
+          done
       - name: Start LocalStack and create S3 bucket
         run: |
           aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true
