@@ -109,14 +109,15 @@ jobs:
         run: |
           echo "Starting API Gateway simulation with samlocal..."
           
-          # Export environment variables to ensure they're available
+          # Export environment variables to ensure they're available for direct lambda invocation
           export GROCERY_BUCKET=grocery-list-bucket
           export AWS_ACCESS_KEY_ID=test
           export AWS_SECRET_ACCESS_KEY=test
           export AWS_REGION=us-east-1
           export AWS_DEFAULT_REGION=us-east-1
+          export AWS_ENDPOINT_URL=http://localhost:4566
           
-          # Create environment file for samlocal
+          # Create environment file for samlocal (LocalStack endpoint is handled automatically by samlocal)
           cat > env.json << EOF
           {
             "GroceryHandler": {
@@ -124,7 +125,8 @@ jobs:
               "AWS_ACCESS_KEY_ID": "test",
               "AWS_SECRET_ACCESS_KEY": "test",
               "AWS_REGION": "us-east-1",
-              "AWS_DEFAULT_REGION": "us-east-1"
+              "AWS_DEFAULT_REGION": "us-east-1",
+              "AWS_ENDPOINT_URL": "http://localhost:4566"
             }
           }
           EOF
@@ -173,6 +175,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
+          AWS_ENDPOINT_URL: http://localhost:4566
           GROCERY_BUCKET: grocery-list-bucket
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
