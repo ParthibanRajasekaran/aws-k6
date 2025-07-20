@@ -14,7 +14,7 @@
     "test:performance:lambda": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-lambda.js --out json=perf-lambda.json && ./scripts/generate-k6-html-report.sh perf-lambda.json perf-lambda-report.html",
     "test:performance": "npm run test:performance:api && npm run test:performance:lambda",
     "start": "localstack start -d && aws --endpoint-url=http://localhost:4566 s3 mb s3://grocery-list-bucket || true && sam local start-api --env-vars env.json",
-    "start:ci": "sam local start-api --env-vars env.json --port 3000 --host 0.0.0.0",
+    "start:ci": "sam local start-api --env-vars env.json --port 3000 --host 0.0.0.0 --docker-network host",
     "deploy": "sam deploy --guided",
     "prepare": "husky"
   },

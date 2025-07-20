@@ -43,20 +43,15 @@ jobs:
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
       - name: Setup AWS SAM CLI
         uses: aws-actions/setup-sam@v1
-      - name: Start API Gateway simulation (SAM/LocalStack)
+      - name: Run API simulation and all tests
         run: |
+          # Start API Gateway simulation in background
           npm run start:ci > sam-local.log 2>&1 &
+          # Give the server time to start
+          echo "Sleeping for 5 seconds to allow API simulation to start..."
           sleep 5
-          echo "--- sam-local.log initial output ---"
-          head -40 sam-local.log || true
-          echo "--- end sam-local.log initial output ---"
-      - name: List running processes (debug)
-        run: |
-          echo "\n--- Running processes after starting API Gateway simulation ---"
-          ps aux
-          echo "--- End of process list ---\n"
-      - name: Run all tests (unit, direct lambda, acceptance, performance)
-        run: ./scripts/test-all.sh
+          # Execute full test suite; test-all.sh includes a wait-for-url step
+          ./scripts/test-all.sh
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
         run: |
