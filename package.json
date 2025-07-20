@@ -7,7 +7,7 @@
     "test:unit": "vitest run",
     "test:acceptance": "java -jar karate.jar -d target test/acceptance",
     "test:lambda:direct": "node test/direct-lambda-invoke.js",
-    "lint": "eslint . --ext .js,.ts,.json --ignore-path .gitignore",
+    "lint": "eslint . --ext .js,.ts,.json",
     "format": "prettier --write .",
     "test:performance:api": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-api-gateway.js --out json=perf-api-gateway.json && ./scripts/generate-k6-html-report.sh perf-api-gateway.json perf-api-gateway-report.html",
     "test:performance:lambda": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-lambda.js --out json=perf-lambda.json && ./scripts/generate-k6-html-report.sh perf-lambda.json perf-lambda-report.html",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^8.4.1",
+    "eslint": "^9.31.0",
     "husky": "^9.1.7",
     "vitest": "^3.2.4"
   }
