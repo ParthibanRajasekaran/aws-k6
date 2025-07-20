@@ -41,14 +41,8 @@ jobs:
       - name: Download Karate JAR
         run: |
           curl -L -o karate.jar https://github.com/karatelabs/karate/releases/download/v1.4.1/karate-1.4.1.jar
-      - name: Install AWS SAM CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip curl
-          curl -Lo aws-sam-cli-linux-x86_64.zip https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
-          unzip aws-sam-cli-linux-x86_64.zip -d sam-installation
-          sudo ./sam-installation/install
-          rm -rf aws-sam-cli-linux-x86_64.zip sam-installation
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v1
       - name: Start API Gateway simulation (SAM/LocalStack)
         run: |
           npm run start:ci > sam-local.log 2>&1 &
