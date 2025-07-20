@@ -7,7 +7,7 @@
     "test:unit": "vitest run",
     "test:acceptance": "java -jar karate.jar -d target test/acceptance",
     "test:lambda:direct": "node test/direct-lambda-invoke.js",
-    "lint": "eslint . --ext .js,.ts,.json",
+    "lint": "eslint src/**/*.js test/**/*.js",
     "format": "prettier --write .",
     "test:performance:api": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-api-gateway.js --out json=perf-api-gateway.json && ./scripts/generate-k6-html-report.sh perf-api-gateway.json perf-api-gateway-report.html",
     "test:performance:lambda": "docker run --rm -v $PWD:/scripts grafana/k6 run /scripts/test/performance/perf-lambda.js --out json=perf-lambda.json && ./scripts/generate-k6-html-report.sh perf-lambda.json perf-lambda-report.html",
