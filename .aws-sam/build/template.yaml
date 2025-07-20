@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Grocery List Microservice
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs18.x
+Resources:
+  GroceryHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/lambda/groceryHandler.handler
+      CodeUri: GroceryHandler
+      Environment:
+        Variables:
+          GROCERY_BUCKET:
+            Ref: GroceryBucket
+      Events:
+        ApiPost:
+          Type: Api
+          Properties:
+            Path: /grocery
+            Method: post
+        ApiGet:
+          Type: Api
+          Properties:
+            Path: /grocery
+            Method: get
+      Policies:
+      - S3CrudPolicy:
+          BucketName:
+            Ref: GroceryBucket
+    Metadata:
+      SamResourceId: GroceryHandler
+  GroceryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: grocery-list-bucket
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value:
+      Fn::Sub: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/grocery
+  BucketName:
+    Description: S3 bucket name
+    Value:
+      Ref: GroceryBucket
