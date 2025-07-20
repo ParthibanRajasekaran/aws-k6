@@ -6,7 +6,7 @@
   "scripts": {
     "test": "npm run test:unit",
     "test:unit": "vitest run",
-    "test:acceptance": "java -jar karate.jar -d target test/acceptance",
+    "test:acceptance": "java -jar karate.jar -o target test/acceptance",
     "test:lambda:direct": "node test/direct-lambda-invoke.js",
     "lint": "eslint src/**/*.js test/**/*.js",
     "format": "prettier --write .",
