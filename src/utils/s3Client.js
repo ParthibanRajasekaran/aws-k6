@@ -2,28 +2,18 @@
 
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
-// Always use LocalStack endpoint if running locally or in SAM
-
-let endpoint = process.env.AWS_ENDPOINT_URL;
-if (!endpoint) {
-  if (process.env.AWS_SAM_LOCAL === 'true' || process.env.AWS_SAM_LOCAL === true) {
-    endpoint = 'http://host.docker.internal:4566';
-  } else if (process.env.LOCALSTACK_HOSTNAME) {
-    endpoint = `http://${process.env.LOCALSTACK_HOSTNAME}:4566`;
-  } else {
-    endpoint = 'http://localhost:4566';
-  }
-}
-
+// Create S3 client with LocalStack endpoint if specified
 const s3Client = new S3Client({
-  endpoint,
-  forcePathStyle: true,
   region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
+  endpoint: process.env.AWS_ENDPOINT_URL || undefined,
+  forcePathStyle: true, // Required for LocalStack
+  credentials: process.env.AWS_ENDPOINT_URL ? {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || 'test',
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || 'test',
-  },
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || 'test'
+  } : undefined
 });
+
+module.exports = s3Client;
 
 /**
  * Put object to S3

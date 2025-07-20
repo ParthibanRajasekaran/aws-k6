@@ -52,6 +52,8 @@ jobs:
           sleep 5
           # Execute full test suite; test-all.sh includes a wait-for-url step
           ./scripts/test-all.sh
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
         run: |
