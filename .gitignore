@@ -23,6 +23,7 @@ reports/
 /test.txt
 *.log
 *.json
+!env.json
 !config/*.json
 !package.json
 !package-lock.json
