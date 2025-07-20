@@ -15,6 +15,27 @@ function makeHandler(groceryService = require('../services/groceryService')) {
     console.log('AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_ACCESS_KEY ? '[SET]' : '[NOT SET]');
     console.log('GROCERY_BUCKET:', process.env.GROCERY_BUCKET);
 
+    // Test network connectivity to LocalStack
+    if (process.env.AWS_ENDPOINT_URL) {
+      try {
+        const https = require('http');
+        const url = new URL(process.env.AWS_ENDPOINT_URL);
+        console.log(`Testing connectivity to LocalStack at ${process.env.AWS_ENDPOINT_URL}...`);
+        const req = https.get(`${process.env.AWS_ENDPOINT_URL}/_localstack/health`, (res) => {
+          console.log('LocalStack connectivity test - Status:', res.statusCode);
+        });
+        req.on('error', (err) => {
+          console.log('LocalStack connectivity test failed:', err.message);
+        });
+        req.setTimeout(2000, () => {
+          req.destroy();
+          console.log('LocalStack connectivity test timed out');
+        });
+      } catch (err) {
+        console.log('Error testing LocalStack connectivity:', err.message);
+      }
+    }
+
     // Health check: respond to GET /grocery
     if (event.httpMethod === 'GET') {
       return {

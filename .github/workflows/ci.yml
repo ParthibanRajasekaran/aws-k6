@@ -18,6 +18,7 @@ jobs:
         image: localstack/localstack:latest
         ports:
           - 4566:4566
+        options: --name localstack --health-cmd="curl -f http://localhost:4566/_localstack/health" --health-interval=10s --health-timeout=5s --health-retries=3
     steps:
       - uses: actions/checkout@v4
       - name: Set up Node.js
@@ -106,6 +107,25 @@ jobs:
           export AWS_REGION=us-east-1
           export AWS_ENDPOINT_URL=http://localhost:4566
           export AWS_DEFAULT_REGION=us-east-1
+          
+          # Verify LocalStack container is reachable from Lambda network
+          docker network ls
+          docker ps
+          
+          # Update the environment file with localhost endpoint for host networking
+          cat > env.json << EOF
+          {
+            "GroceryHandler": {
+              "GROCERY_BUCKET": "grocery-list-bucket",
+              "AWS_ACCESS_KEY_ID": "test",
+              "AWS_SECRET_ACCESS_KEY": "test",
+              "AWS_REGION": "us-east-1",
+              "AWS_ENDPOINT_URL": "http://localhost:4566",
+              "AWS_DEFAULT_REGION": "us-east-1"
+            }
+          }
+          EOF
+          cat env.json
           
           # Start the API Gateway simulation in background without using & to prevent job termination
           # npm run start:ci will use SAM CLI to start the API gateway locally
