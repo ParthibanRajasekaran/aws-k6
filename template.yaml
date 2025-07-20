@@ -16,6 +16,7 @@ Resources:
       Environment:
         Variables:
           GROCERY_BUCKET: !Ref GroceryBucket
+          AWS_ENDPOINT_URL: http://localhost:4566
       Events:
         ApiPost:
           Type: Api
