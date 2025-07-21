@@ -82,7 +82,7 @@ jobs:
               "AWS_ACCESS_KEY_ID": "test",
               "AWS_SECRET_ACCESS_KEY": "test",
               "AWS_REGION": "us-east-1",
-              "AWS_ENDPOINT_URL": "http://localhost:4566",
+              "AWS_ENDPOINT_URL": "http://localstack-main:4566",
               "AWS_DEFAULT_REGION": "us-east-1"
             }
           }
@@ -95,7 +95,7 @@ jobs:
           AWS_ACCESS_KEY_ID=test
           AWS_SECRET_ACCESS_KEY=test
           AWS_REGION=us-east-1
-          AWS_ENDPOINT_URL=http://localhost:4566
+          AWS_ENDPOINT_URL=http://localstack-main:4566
           AWS_DEFAULT_REGION=us-east-1
           EOF
       
@@ -115,7 +115,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY=test
           export AWS_REGION=us-east-1
           export AWS_DEFAULT_REGION=us-east-1
-          export AWS_ENDPOINT_URL=http://localhost:4566
+          export AWS_ENDPOINT_URL=http://localstack-main:4566
           
           # Create environment file for samlocal (LocalStack endpoint is handled automatically by samlocal)
           cat > env.json << EOF
@@ -126,7 +126,7 @@ jobs:
               "AWS_SECRET_ACCESS_KEY": "test",
               "AWS_REGION": "us-east-1",
               "AWS_DEFAULT_REGION": "us-east-1",
-              "AWS_ENDPOINT_URL": "http://localhost:4566"
+              "AWS_ENDPOINT_URL": "http://localstack-main:4566"
             }
           }
           EOF
@@ -175,7 +175,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
-          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ENDPOINT_URL: http://localstack-main:4566
           GROCERY_BUCKET: grocery-list-bucket
       - name: Print API Gateway simulation logs if health check fails
         if: failure()
