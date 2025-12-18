@@ -71,6 +71,7 @@ jobs:
       
       - name: Install samlocal wrapper
         run: |
+          pip install "click>=8.3.1"
           pip install aws-sam-cli-local
       - name: Create CI-specific environment file
         run: |
